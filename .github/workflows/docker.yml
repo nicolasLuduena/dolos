@@ -1,8 +1,8 @@
 name: Docker
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - "**"
 
 jobs:
   build:
@@ -71,7 +71,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/txpipe/dolos
+          images: ghcr.io/nicolasLuduena/dolos
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern=v{{major}}
@@ -82,7 +82,7 @@ jobs:
       - name: Login to DockerHub
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io/txpipe
+          registry: ghcr.io/nicolasLuduena
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
