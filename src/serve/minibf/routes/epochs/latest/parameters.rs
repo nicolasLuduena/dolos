@@ -73,15 +73,21 @@ pub struct ProtocolParams {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct CostModelsRaw {
+    #[serde(rename = "PlutusV1")]
     pub plutus_v1: Option<Vec<i64>>,
+    #[serde(rename = "PlutusV2")]
     pub plutus_v2: Option<Vec<i64>>,
+    #[serde(rename = "PlutusV3")]
     pub plutus_v3: Option<Vec<i64>>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct CostModels {
+    #[serde(rename = "PlutusV1")]
     pub plutus_v1: Option<CostParametersV1>,
+    #[serde(rename = "PlutusV2")]
     pub plutus_v2: Option<CostParametersV2>,
+    #[serde(rename = "PlutusV3")]
     pub plutus_v3: Option<CostParametersV3>,
 }
 
