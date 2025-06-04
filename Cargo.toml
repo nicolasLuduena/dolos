@@ -120,7 +120,7 @@ lto = "thin"
 members = ["crates/cardano", "crates/core", "crates/minibf"]
 
 [workspace.dependencies]
-pallas = { git = "https://github.com/txpipe/pallas.git", features = ["hardano"] }
+pallas = { git = "https://github.com/nicolasLuduena/pallas.git", features = ["hardano"] }
 # pallas = { version = "1.0.0-alpha.2", features = ["hardano"] }
 # pallas = { path = "../pallas/pallas", features = ["hardano"] }
 thiserror = "2.0.12"
