@@ -9,6 +9,9 @@ mod feedback;
 mod serve;
 mod sync;
 
+#[cfg(feature = "tui")]
+mod tui;
+
 #[cfg(feature = "utils")]
 mod init;
 

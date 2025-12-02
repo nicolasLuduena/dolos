@@ -4,7 +4,10 @@ use miette::{Context, IntoDiagnostic};
 use tracing::{error, warn};
 
 #[derive(Debug, clap::Args)]
-pub struct Args {}
+pub struct Args {
+    #[clap(long)]
+    pub tui: bool,
+}
 
 #[tokio::main]
 pub async fn run(config: RootConfig, _args: &Args) -> miette::Result<()> {
@@ -13,6 +16,20 @@ pub async fn run(config: RootConfig, _args: &Args) -> miette::Result<()> {
     let domain = crate::common::setup_domain(&config).await?;
 
     let exit = crate::common::hook_exit_token();
+
+    if _args.tui {
+        #[cfg(feature = "tui")]
+        {
+            let _ = crate::tui::spawn_tui(exit.clone());
+        }
+
+        #[cfg(not(feature = "tui"))]
+        {
+            eprintln!(
+                "TUI requested but not compiled in. Rebuild with `--features tui` to enable it."
+            );
+        }
+    }
 
     let sync = dolos::sync::pipeline(
         &config.sync,
