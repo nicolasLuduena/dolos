@@ -21,6 +21,7 @@ use pallas::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    add,
     estart::{
         nonces::NonceTransition,
         reset::{AccountTransition, EpochTransition, PoolTransition},
@@ -39,8 +40,8 @@ use crate::{
     pots::{EpochIncentives, Pots},
     roll::{
         accounts::{
-            ControlledAmountDec, ControlledAmountInc, StakeDelegation, StakeDeregistration,
-            StakeRegistration, VoteDelegation, WithdrawalInc,
+            AssignMirRewards, ControlledAmountDec, ControlledAmountInc, StakeDelegation,
+            StakeDeregistration, StakeRegistration, VoteDelegation, WithdrawalInc,
         },
         assets::MintStatsUpdate,
         dreps::{DRepActivity, DRepRegistration, DRepUnRegistration},
@@ -48,6 +49,7 @@ use crate::{
         pools::{MintedBlocksInc, PoolDeRegistration, PoolRegistration},
         proposals::NewProposal,
     },
+    sub,
 };
 
 #[derive(Debug, Encode, Decode, Clone, Serialize, Deserialize, PartialEq, Eq, Copy)]
@@ -449,17 +451,17 @@ pub struct Stake {
 impl Stake {
     pub fn total(&self) -> u64 {
         let mut out = self.utxo_sum;
-        out += self.rewards_sum;
-        out -= self.withdrawals_sum;
+        out = add!(out, self.rewards_sum);
+        out = sub!(out, self.withdrawals_sum);
 
         out
     }
 
     pub fn total_pre_conway(&self) -> u64 {
         let mut out = self.utxo_sum;
-        out += self.utxo_sum_at_pointer_addresses;
-        out += self.rewards_sum;
-        out -= self.withdrawals_sum;
+        out = add!(out, self.utxo_sum_at_pointer_addresses);
+        out = add!(out, self.rewards_sum);
+        out = sub!(out, self.withdrawals_sum);
 
         out
     }
@@ -472,10 +474,7 @@ impl Stake {
     }
 
     pub fn withdrawable(&self) -> u64 {
-        let mut out = self.rewards_sum;
-        out -= self.withdrawals_sum;
-
-        out
+        sub!(self.rewards_sum, self.withdrawals_sum)
     }
 }
 
@@ -1440,6 +1439,10 @@ pub struct RollingStats {
     #[n(18)]
     #[cbor(default)]
     pub treasury_donations: Lovelace,
+
+    #[n(19)]
+    #[cbor(default)]
+    pub reserve_mirs: Lovelace,
 }
 
 impl TransitionDefault for RollingStats {
@@ -1817,6 +1820,7 @@ pub enum CardanoDelta {
     PoolWrapUp(PoolWrapUp),
     ProposalDepositRefund(ProposalDepositRefund),
     TreasuryWithdrawal(TreasuryWithdrawal),
+    AssignMirRewards(AssignMirRewards),
 }
 
 impl CardanoDelta {
@@ -1884,6 +1888,7 @@ delta_from!(DRepDelegatorDrop);
 delta_from!(PoolWrapUp);
 delta_from!(ProposalDepositRefund);
 delta_from!(TreasuryWithdrawal);
+delta_from!(AssignMirRewards);
 
 impl dolos_core::EntityDelta for CardanoDelta {
     type Entity = super::model::CardanoEntity;
@@ -1921,6 +1926,7 @@ impl dolos_core::EntityDelta for CardanoDelta {
             Self::PoolWrapUp(x) => x.key(),
             Self::ProposalDepositRefund(x) => x.key(),
             Self::TreasuryWithdrawal(x) => x.key(),
+            Self::AssignMirRewards(x) => x.key(),
         }
     }
 
@@ -1957,6 +1963,7 @@ impl dolos_core::EntityDelta for CardanoDelta {
             Self::PoolWrapUp(x) => Self::downcast_apply(x, entity),
             Self::ProposalDepositRefund(x) => Self::downcast_apply(x, entity),
             Self::TreasuryWithdrawal(x) => Self::downcast_apply(x, entity),
+            Self::AssignMirRewards(x) => Self::downcast_apply(x, entity),
         }
     }
 
@@ -1993,6 +2000,7 @@ impl dolos_core::EntityDelta for CardanoDelta {
             Self::PoolWrapUp(x) => Self::downcast_undo(x, entity),
             Self::ProposalDepositRefund(x) => Self::downcast_undo(x, entity),
             Self::TreasuryWithdrawal(x) => Self::downcast_undo(x, entity),
+            Self::AssignMirRewards(x) => Self::downcast_undo(x, entity),
         }
     }
 }
