@@ -91,7 +91,12 @@ impl dolos_core::EntityDelta for ControlledAmountDec {
         if self.is_pointer {
             stake.utxo_sum_at_pointer_addresses -= self.amount;
         } else {
-            stake.utxo_sum -= self.amount;
+            dbg!(&stake.utxo_sum, &self.amount);
+            if self.amount > stake.utxo_sum {
+                stake.utxo_sum = 0;
+            } else {
+                stake.utxo_sum -= self.amount;
+            }
         }
     }
 
