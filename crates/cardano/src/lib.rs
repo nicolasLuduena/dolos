@@ -259,6 +259,20 @@ impl dolos_core::ChainLogic for CardanoLogic {
 
         let cursor = state.read_cursor()?;
 
+        // HACK: override protocol parameters
+        use dolos_core::StateWriter;
+        if let Ok(Some(mut epoch)) = state
+            .read_entity_typed::<EpochState>(EpochState::NS, &EntityKey::from(CURRENT_EPOCH_KEY))
+        {
+            if let Some(pparams) = epoch.pparams.live_mut_unchecked() {
+                pparams.set(PParamValue::AdaPerUtxoByte(4310));
+
+                let writer = state.start_writer()?;
+                writer.write_entity_typed(&EntityKey::from(CURRENT_EPOCH_KEY), &epoch)?;
+                writer.commit()?;
+            }
+        }
+
         let work = match cursor {
             Some(cursor) => WorkBuffer::new_from_cursor(cursor),
             None => WorkBuffer::Empty,
