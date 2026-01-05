@@ -31,6 +31,7 @@ pub mod batch;
 pub mod config;
 pub mod crawl;
 pub mod facade;
+pub mod hacks;
 pub mod mempool;
 pub mod point;
 pub mod state;
@@ -303,6 +304,7 @@ pub struct Genesis {
     pub conway: pallas::interop::hardano::configs::conway::GenesisFile,
     pub shelley_hash: Hash<32>,
     pub force_protocol: Option<usize>,
+    pub hacks: hacks::Hacks,
 }
 
 impl Genesis {
@@ -315,6 +317,7 @@ impl Genesis {
         shelley: impl AsRef<Path>,
         alonzo: impl AsRef<Path>,
         conway: impl AsRef<Path>,
+        hacks_path: Option<impl AsRef<Path>>,
         force_protocol: Option<usize>,
     ) -> Result<Self, std::io::Error> {
         let shelley_bytes = std::fs::read(shelley.as_ref())?;
@@ -327,6 +330,13 @@ impl Genesis {
         let alonzo = pallas::ledger::configs::alonzo::from_file(alonzo.as_ref())?;
         let conway = pallas::ledger::configs::conway::from_file(conway.as_ref())?;
 
+        let hacks = if let Some(path) = hacks_path {
+            let file = std::fs::File::open(path)?;
+            serde_json::from_reader(file)?
+        } else {
+            hacks::Hacks::default()
+        };
+
         Ok(Self {
             byron,
             shelley,
@@ -334,6 +344,7 @@ impl Genesis {
             conway,
             force_protocol,
             shelley_hash,
+            hacks,
         })
     }
 }

@@ -220,6 +220,7 @@ pub fn open_genesis_files(config: &GenesisConfig) -> miette::Result<Genesis> {
         &config.shelley_path,
         &config.alonzo_path,
         &config.conway_path,
+        config.hacks_path.as_ref(),
         config.force_protocol,
     )
     .into_diagnostic()

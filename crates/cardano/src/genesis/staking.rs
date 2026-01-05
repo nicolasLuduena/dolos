@@ -75,7 +75,8 @@ fn find_initial_utxo_sum(credential: &StakeCredential, genesis: &Genesis) -> u64
     for (address, amount) in initial_funds {
         let address: Address = address.parse().unwrap();
 
-        if let Some((candidate, _)) = pallas_extras::address_as_stake_cred(&address) {
+        if let Some((candidate, _)) = pallas_extras::address_as_stake_cred(&genesis.hacks, &address)
+        {
             if credential == &candidate {
                 return *amount;
             }

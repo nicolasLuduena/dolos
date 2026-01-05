@@ -1,0 +1,63 @@
+{
+    "pointers": [
+        {
+            "slot": 10612742,
+            "tx_idx": 0,
+            "cert_idx": 0,
+            "credential": "4dcca876aac2fcc561f7df3da772d747e2148c9a05c7b27e49a05ea2"
+        },
+        {
+            "slot": 70549345,
+            "tx_idx": 1,
+            "cert_idx": 0,
+            "credential": "b1a3b1ef9460dc7bef8ffdf49ce4e01b1cc2505c614ee62b3223f458"
+        }
+    ],
+    "proposals": [
+        {
+            "id": "9972ffaee13b4afcf1a133434161ce25e8ecaf34b7a76e06b0c642125cf911a9#0",
+            "outcome": "ratified",
+            "epoch": 1
+        },
+        {
+            "id": "f48fffc65e16c3808720b38110a6d284250360108b6198a44331eb0de8e49817#0",
+            "outcome": "ratified",
+            "epoch": 3
+        },
+        {
+            "id": "82b8de69d2ddd8b926e2af5979dc55ec18282d73bfe009c25bea9ef75e3fe11e#0",
+            "outcome": "ratified",
+            "epoch": 27
+        },
+        {
+            "id": "e974fecbf45ac386a76605e9e847a2e5d27c007fdd0be674cbad538e0c35fe01#0",
+            "outcome": "canceled",
+            "epoch": 180
+        },
+        {
+            "id": "ccb27f6b0d58c25ae33fd821b62c387f5230dae930afd07489fa3df56ae56522#0",
+            "outcome": "ratified",
+            "epoch": 180
+        },
+        {
+            "id": "b52f02288e3ce8c7e57455522f4edd09c12797749e2db32098ecbe980b645d45#0",
+            "outcome": "ratified",
+            "epoch": 179
+        },
+        {
+            "id": "ba588be9a6c9c5ffba7dd4166cf295ae082be53028717005d1aeceb625e65461#0",
+            "outcome": "ratified",
+            "epoch": 228
+        },
+        {
+            "id": "6f8b70a482e10ae4077d70730826ef27f72b08e148118a5171c72e7fe3c6d551#0",
+            "outcome": "ratified",
+            "epoch": 231
+        },
+        {
+            "id": "49578eba0c840e822e0688b09112f3f9baaeb51dd0e346c5a4f9d03d2cbc1953#0",
+            "outcome": "ratified",
+            "epoch": 232
+        }
+    ]
+}

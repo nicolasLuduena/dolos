@@ -21,6 +21,7 @@ use crate::{
     roll::BlockVisitor,
     CardanoLogic, Lovelace, PParamValue, PParamsSet, ProposalAction, ProposalState,
 };
+use dolos_core::hacks::Hacks;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewProposal {
@@ -34,6 +35,7 @@ pub struct NewProposal {
     current_epoch: Epoch,
     network_magic: u32,
     protocol: u16,
+    hacks: Hacks,
 }
 
 impl dolos_core::EntityDelta for NewProposal {
@@ -49,7 +51,7 @@ impl dolos_core::EntityDelta for NewProposal {
     fn apply(&mut self, entity: &mut Option<ProposalState>) {
         let id = ProposalState::id(self.tx, self.idx);
 
-        let outcome = hacks::proposals::outcome(self.network_magic, self.protocol, &id);
+        let outcome = hacks::proposals::outcome(&self.hacks, self.protocol, &id);
 
         let max_epoch = self.validity_period.map(|x| self.current_epoch + x);
 
@@ -102,11 +104,11 @@ macro_rules! check_conway_pparams {
     };
 }
 
-fn parse_treasury_withdrawals(withdrawals: &BTreeMap<Bytes, u64>) -> ProposalAction {
+fn parse_treasury_withdrawals(hacks: &Hacks, withdrawals: &BTreeMap<Bytes, u64>) -> ProposalAction {
     let mut items = vec![];
 
     for (credential, amount) in withdrawals {
-        let credential = pallas_extras::parse_reward_account(credential)
+        let credential = pallas_extras::parse_reward_account(hacks, credential)
             .expect("reward account should be valid");
         let amount = *amount;
         items.push((credential, amount));
@@ -320,6 +322,7 @@ pub struct ProposalVisitor {
     current_epoch: Option<Epoch>,
     network_magic: Option<u32>,
     protocol: Option<u16>,
+    hacks: Option<Hacks>,
 }
 
 impl BlockVisitor for ProposalVisitor {
@@ -336,6 +339,7 @@ impl BlockVisitor for ProposalVisitor {
         self.current_epoch = Some(epoch);
         self.network_magic = Some(genesis.network_magic());
         self.protocol = Some(protocol);
+        self.hacks = Some(genesis.hacks.clone());
 
         Ok(())
     }
@@ -360,6 +364,7 @@ impl BlockVisitor for ProposalVisitor {
             current_epoch: self.current_epoch.expect("value set in root"),
             network_magic: self.network_magic.expect("value set in root"),
             protocol: self.protocol.expect("value set in root"),
+            hacks: self.hacks.clone().expect("value set in root"),
         });
 
         Ok(())
@@ -382,15 +387,20 @@ impl BlockVisitor for ProposalVisitor {
                 ProposalAction::ParamChange(conway_to_pparamset(x))
             }
             GovAction::HardForkInitiation(_, version) => ProposalAction::HardFork(*version),
-            GovAction::TreasuryWithdrawals(x, _) => parse_treasury_withdrawals(x),
+            GovAction::TreasuryWithdrawals(x, _) => {
+                parse_treasury_withdrawals(self.hacks.as_ref().unwrap(), x)
+            }
             GovAction::Information => ProposalAction::Other,
             GovAction::NoConfidence(..) => ProposalAction::Other,
             GovAction::UpdateCommittee(..) => ProposalAction::Other,
             GovAction::NewConstitution(..) => ProposalAction::Other,
         };
 
-        let reward_account = pallas_extras::parse_reward_account(&proposal.reward_account)
-            .ok_or(ChainError::InvalidProposalParams)?;
+        let reward_account = pallas_extras::parse_reward_account(
+            self.hacks.as_ref().unwrap(),
+            &proposal.reward_account,
+        )
+        .ok_or(ChainError::InvalidProposalParams)?;
 
         deltas.add_for_entity(NewProposal {
             slot: block.slot(),
@@ -403,6 +413,7 @@ impl BlockVisitor for ProposalVisitor {
             current_epoch: self.current_epoch.expect("value set in root"),
             network_magic: self.network_magic.expect("value set in root"),
             protocol: self.protocol.expect("value set in root"),
+            hacks: self.hacks.clone().expect("value set in root"),
         });
 
         Ok(())

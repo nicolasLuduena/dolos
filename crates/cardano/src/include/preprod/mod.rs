@@ -7,6 +7,7 @@ pub const BYRON: &[u8] = include_bytes!("byron.json");
 pub const SHELLEY: &[u8] = include_bytes!("shelley.json");
 pub const ALONZO: &[u8] = include_bytes!("alonzo.json");
 pub const CONWAY: &[u8] = include_bytes!("conway.json");
+pub const HACKS: &[u8] = include_bytes!("hacks.json");
 
 pub fn load() -> Genesis {
     let mut hasher = Hasher::<256>::new();
@@ -20,6 +21,7 @@ pub fn load() -> Genesis {
         shelley: serde_json::from_slice(SHELLEY).unwrap(),
         force_protocol: None,
         shelley_hash,
+        hacks: serde_json::from_slice(HACKS).unwrap(),
     }
 }
 
@@ -28,6 +30,7 @@ pub fn save(root: &Path) -> std::io::Result<()> {
     std::fs::write(root.join("shelley.json"), SHELLEY)?;
     std::fs::write(root.join("alonzo.json"), ALONZO)?;
     std::fs::write(root.join("conway.json"), CONWAY)?;
+    std::fs::write(root.join("hacks.json"), HACKS)?;
 
     Ok(())
 }

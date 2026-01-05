@@ -137,6 +137,8 @@ pub struct MockContext {
     /// Computed pot delta for the rewards calculation
     #[serde(skip)]
     incentives: Option<EpochIncentives>,
+    #[serde(skip, default)]
+    hacks: dolos_core::hacks::Hacks,
 }
 
 impl MockContext {
@@ -294,6 +296,10 @@ impl super::RewardsContext for MockContext {
 
     fn pparams(&self) -> &PParamsSet {
         &self.pparams
+    }
+
+    fn hacks(&self) -> &dolos_core::hacks::Hacks {
+        &self.hacks
     }
 }
 

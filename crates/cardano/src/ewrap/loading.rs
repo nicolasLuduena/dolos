@@ -28,8 +28,8 @@ impl BoundaryWork {
     ) -> Result<Option<AccountState>, ChainError> {
         let account = &pool.snapshot.unwrap_live().params.reward_account;
 
-        let account =
-            pallas_extras::parse_reward_account(account).ok_or(ChainError::InvalidPoolParams)?;
+        let account = pallas_extras::parse_reward_account(&self.genesis.hacks, account)
+            .ok_or(ChainError::InvalidPoolParams)?;
 
         let entity_key = minicbor::to_vec(account).unwrap();
 

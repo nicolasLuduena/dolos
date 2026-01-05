@@ -180,6 +180,7 @@ pub struct GenesisConfig {
     pub shelley_path: PathBuf,
     pub alonzo_path: PathBuf,
     pub conway_path: PathBuf,
+    pub hacks_path: Option<PathBuf>,
     pub force_protocol: Option<usize>,
 }
 
@@ -190,6 +191,7 @@ impl Default for GenesisConfig {
             shelley_path: PathBuf::from("shelley.json"),
             alonzo_path: PathBuf::from("alonzo.json"),
             conway_path: PathBuf::from("conway.json"),
+            hacks_path: None,
             force_protocol: None,
         }
     }

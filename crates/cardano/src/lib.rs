@@ -430,6 +430,7 @@ pub fn load_test_genesis(env: &str) -> Genesis {
         test_data.join("genesis/shelley.json"),
         test_data.join("genesis/alonzo.json"),
         test_data.join("genesis/conway.json"),
+        None::<std::path::PathBuf>,
         None,
     )
     .unwrap()

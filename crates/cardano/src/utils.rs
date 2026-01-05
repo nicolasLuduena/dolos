@@ -80,6 +80,7 @@ pub fn load_genesis(path: &std::path::Path) -> Genesis {
         path.join("shelley.json"),
         path.join("alonzo.json"),
         path.join("conway.json"),
+        None::<std::path::PathBuf>,
         None,
     )
     .unwrap()

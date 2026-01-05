@@ -1204,6 +1204,7 @@ dependencies = [
  "rayon",
  "regex",
  "serde",
+ "serde_json",
  "serde_with 3.16.0",
  "thiserror 2.0.12",
  "tokio",

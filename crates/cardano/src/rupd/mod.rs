@@ -104,6 +104,7 @@ pub struct RupdWork {
     pub max_supply: u64,
     pub chain: ChainSummary,
     pub pparams: Option<PParamsSet>,
+    pub hacks: dolos_core::hacks::Hacks,
 }
 
 fn log_work<D: Domain>(

@@ -118,13 +118,18 @@ impl From<&KnownNetwork> for GenesisConfig {
         match value {
             KnownNetwork::CardanoPreview => GenesisConfig {
                 force_protocol: Some(6), // Preview network starts at Alonzo
+                hacks_path: Some(PathBuf::from("hacks.json")),
                 ..Default::default()
             },
             KnownNetwork::CardanoPreProd => GenesisConfig {
+                hacks_path: Some(PathBuf::from("hacks.json")),
+                ..Default::default()
+            },
+            KnownNetwork::CardanoMainnet => GenesisConfig {
+                hacks_path: Some(PathBuf::from("hacks.json")),
                 ..Default::default()
             },
             // KnownNetwork::CardanoSanchonet => todo!(),
-            _ => GenesisConfig::default(),
         }
     }
 }
@@ -565,6 +570,11 @@ impl ConfigEditor {
         Ok(self)
     }
 
+    fn include_hacks_file(self) -> miette::Result<Self> {
+        // hacks.json is automatically included by `include_genesis_files` via the `save` method of each network module
+        Ok(self)
+    }
+
     fn save(self, path: &Path) -> miette::Result<()> {
         let config = toml::to_string_pretty(&self.0)
             .into_diagnostic()
@@ -589,6 +599,7 @@ pub fn run(
         .fill_values_from_args(args)
         .confirm_values()?
         .include_genesis_files()?
+        .include_hacks_file()?
         .save(&PathBuf::from("dolos.toml"))?;
 
     println!("config saved to dolos.toml");

@@ -1,4 +1,5 @@
 use dolos_core::batch::WorkDeltas;
+use dolos_core::hacks::Hacks;
 use dolos_core::{BlockSlot, ChainError, Genesis, NsKey};
 use pallas::codec::minicbor;
 use pallas::crypto::hash::Hash;
@@ -447,10 +448,11 @@ impl dolos_core::EntityDelta for AssignMirRewards {
     }
 }
 
-#[derive(Default, Clone)]
+#[derive(Default)]
 pub struct AccountVisitor {
     deposit: Option<u64>,
     epoch: Option<Epoch>,
+    hacks: Option<Hacks>,
 }
 
 impl BlockVisitor for AccountVisitor {
@@ -458,13 +460,14 @@ impl BlockVisitor for AccountVisitor {
         &mut self,
         _: &mut WorkDeltas<CardanoLogic>,
         _: &MultiEraBlock,
-        _: &Genesis,
+        genesis: &Genesis,
         pparams: &PParamsSet,
         epoch: Epoch,
         _: u16,
     ) -> Result<(), ChainError> {
         self.deposit = pparams.ensure_key_deposit().ok();
         self.epoch = Some(epoch);
+        self.hacks = Some(genesis.hacks.clone());
         Ok(())
     }
 
@@ -478,7 +481,9 @@ impl BlockVisitor for AccountVisitor {
     ) -> Result<(), ChainError> {
         let address = resolved.address().unwrap();
 
-        let Some((cred, is_pointer)) = pallas_extras::address_as_stake_cred(&address) else {
+        let Some((cred, is_pointer)) =
+            pallas_extras::address_as_stake_cred(self.hacks.as_ref().unwrap(), &address)
+        else {
             return Ok(());
         };
 
@@ -502,7 +507,9 @@ impl BlockVisitor for AccountVisitor {
         let address = output.address().expect("valid address");
         let epoch = self.epoch.expect("value set in root");
 
-        let Some((cred, is_pointer)) = pallas_extras::address_as_stake_cred(&address) else {
+        let Some((cred, is_pointer)) =
+            pallas_extras::address_as_stake_cred(self.hacks.as_ref().unwrap(), &address)
+        else {
             return Ok(());
         };
 
@@ -583,7 +590,9 @@ impl BlockVisitor for AccountVisitor {
     ) -> Result<(), ChainError> {
         let address = Address::from_bytes(account)?;
 
-        let Some((cred, _)) = pallas_extras::address_as_stake_cred(&address) else {
+        let Some((cred, _)) =
+            pallas_extras::address_as_stake_cred(self.hacks.as_ref().unwrap(), &address)
+        else {
             return Ok(());
         };
 

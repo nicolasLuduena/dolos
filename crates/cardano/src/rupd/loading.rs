@@ -244,6 +244,7 @@ impl RupdWork {
             pots,
             incentives,
             snapshot: StakeSnapshot::default(),
+            hacks: genesis.hacks.clone(),
         };
 
         if let Some((snapshot_epoch, _)) = work.relevant_epochs() {
@@ -329,5 +330,9 @@ impl crate::rewards::RewardsContext for RupdWork {
 
     fn pre_allegra(&self) -> bool {
         self.pparams().protocol_major().unwrap_or(0) < 3
+    }
+
+    fn hacks(&self) -> &dolos_core::hacks::Hacks {
+        &self.hacks
     }
 }

@@ -1,6 +1,6 @@
 use std::{collections::HashMap, marker::PhantomData};
 
-use dolos_core::ChainError;
+use dolos_core::{hacks::Hacks, ChainError};
 use pallas::ledger::primitives::StakeCredential;
 use tracing::debug;
 
@@ -327,6 +327,8 @@ pub trait RewardsContext {
 
         live_pledge
     }
+
+    fn hacks(&self) -> &Hacks;
 }
 
 pub fn define_rewards<C: RewardsContext>(ctx: &C) -> Result<RewardMap<C>, ChainError> {
@@ -335,8 +337,11 @@ pub fn define_rewards<C: RewardsContext>(ctx: &C) -> Result<RewardMap<C>, ChainE
     for pool in ctx.iter_all_pools() {
         let pool_params = ctx.pool_params(pool);
 
-        let operator_account = pallas_extras::parse_reward_account(&pool_params.reward_account)
-            .expect("invalid pool reward account");
+        let pool_params = ctx.pool_params(pool);
+
+        let operator_account =
+            pallas_extras::parse_reward_account(ctx.hacks(), &pool_params.reward_account)
+                .expect("invalid pool reward account");
 
         let owners = pool_params
             .pool_owners

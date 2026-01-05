@@ -1,0 +1,67 @@
+{
+    "pointers": [
+        {
+            "slot": 2940289,
+            "tx_idx": 1,
+            "cert_idx": 0,
+            "credential": "0c90492bbe7eb33f38173255e547dc3194abcec5cd29cdf504bb4f03"
+        }
+    ],
+    "proposals": [
+        {
+            "id": "69c948cde90c6b9d7d61595e8534c106ec44132cb049ab2558399db1260c1f69#0",
+            "outcome": "ratified",
+            "epoch": 1095
+        },
+        {
+            "id": "ac993231c39a4ee13bcf888e971e099809c4c08d96a7572aa3611a5ed42fa7d4#0",
+            "outcome": "ratified",
+            "epoch": 1012
+        },
+        {
+            "id": "602d8572263929bdb0aba911d45ecf4bf0a2430e2f263f89df7114d168985f57#0",
+            "outcome": "ratified",
+            "epoch": 998
+        },
+        {
+            "id": "6214314b6d6a30118d259c9597c0e0120b76aa521e322044c4290fcaac86e27a#0",
+            "outcome": "ratified",
+            "epoch": 997
+        },
+        {
+            "id": "f4188b8676bae7f3bb26626e57d1bf6b5212dc078581d00233e27f55a1392b0e#0",
+            "outcome": "ratified",
+            "epoch": 993
+        },
+        {
+            "id": "35b81b424956f018bb4a4bb9e160375c1921a3b40b60a1efc539bcd6b5b20159#0",
+            "outcome": "ratified",
+            "epoch": 963
+        },
+        {
+            "id": "049ae5d612b2fa825655809133b023d60c7f8cac683c278cf95de1622e4592f3#0",
+            "outcome": "ratified",
+            "epoch": 742
+        },
+        {
+            "id": "1f47f3cf2e4f9109be2efe9182cae08307e5778bdfea2150e6903c48edca0b8f#0",
+            "outcome": "ratified",
+            "epoch": 735
+        },
+        {
+            "id": "2841a581076167a0662f1b4f1a38bcc8eff386f9ce45c33ae33b1fe8289de210#0",
+            "outcome": "canceled",
+            "epoch": 736
+        },
+        {
+            "id": "95af8608dc7aaf5c73025066b509a2c11c829f2984009ac92e7053d123fbce57#0",
+            "outcome": "canceled",
+            "epoch": 736
+        },
+        {
+            "id": "3d573646d495b939ad019afc2653fbad023615b4ee5643d41fd9fa9cdb91fe29#0",
+            "outcome": "Canceled",
+            "epoch": 994
+        }
+    ]
+}

@@ -1,0 +1,35 @@
+{
+    "pointers": [],
+    "proposals": [
+        {
+            "id": "47a0e7a4f9383b1afc2192b23b41824d65ac978d7741aca61fc1fa16833d1111#0",
+            "outcome": "ratified",
+            "epoch": 580
+        },
+        {
+            "id": "2c7f900b7ff68f317a7b0e42231d4aed36227660baf2ee9a4be7e880eb977313#0",
+            "outcome": "ratified",
+            "epoch": 575
+        },
+        {
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#36",
+            "outcome": "ratified",
+            "epoch": 575
+        },
+        {
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#35",
+            "outcome": "ratified",
+            "epoch": 577
+        },
+        {
+            "id": "8c653ee5c9800e6d31e79b5a7f7d4400c81d44717ad4db633dc18d4c07e4a4fd#0",
+            "outcome": "ratified",
+            "epoch": 541
+        },
+        {
+            "id": "0b19476e40bbbb5e1e8ce153523762e2b6859e7ecacbaf06eae0ee6a447e79b9#0",
+            "outcome": "ratified",
+            "epoch": 536
+        }
+    ]
+}
