@@ -1,9 +1,12 @@
 use dolos_cardano::{
-    load_effective_pparams, EraSummary as DolosEraSummary, FixedNamespace as _, PoolState,
+    load_effective_pparams, AccountState, EraSummary as DolosEraSummary, FixedNamespace as _,
+    PoolDelegation, PoolState,
 };
 use dolos_core::StateStore;
 use pallas::codec::minicbor::{self, Decode, Encode, Encoder};
 use pallas::codec::utils::{AnyCbor, AnyUInt, Bytes, KeyValuePairs, Nullable};
+use pallas::crypto::hash::Hash;
+use pallas::ledger::primitives::StakeCredential;
 use pallas::ledger::traverse::{MultiEraOutput, OriginalHash};
 use pallas::network::miniprotocols::localstate::queries_v16 as q16;
 use pallas::network::miniprotocols::localtxsubmission::SMaybe;
@@ -496,4 +499,90 @@ pub fn build_pool_state_response<D: Domain>(
     };
 
     Ok(AnyCbor::from_encode((pstate,)))
+}
+
+/// Convert a q16::StakeAddr to a pallas StakeCredential
+fn stake_addr_to_credential(stake_addr: &q16::StakeAddr) -> Option<StakeCredential> {
+    // StakeAddr has addr_type (0=key, 1=script) and payload (28 bytes)
+    // We need to access the fields - they're private so we encode/decode
+    let encoded = pallas::codec::minicbor::to_vec(stake_addr).ok()?;
+    let (addr_type, payload): (u8, Bytes) = pallas::codec::minicbor::decode(&encoded).ok()?;
+
+    let hash_bytes: [u8; 28] = payload.as_slice().try_into().ok()?;
+    let hash = Hash::from(hash_bytes);
+
+    match addr_type {
+        0 => Some(StakeCredential::AddrKeyhash(hash)),
+        1 => Some(StakeCredential::ScriptHash(hash)),
+        _ => None,
+    }
+}
+
+/// Convert a pallas StakeCredential back to q16::StakeAddr
+fn credential_to_stake_addr(cred: &StakeCredential) -> q16::StakeAddr {
+    match cred {
+        StakeCredential::AddrKeyhash(hash) => (0u8, Bytes::from(hash.as_ref().to_vec())).into(),
+        StakeCredential::ScriptHash(hash) => (1u8, Bytes::from(hash.as_ref().to_vec())).into(),
+    }
+}
+
+pub fn build_stake_address_info_response<D: Domain>(
+    domain: &D,
+    stake_addrs: &q16::StakeAddrs,
+) -> Result<AnyCbor, Error> {
+    let state = domain.state();
+
+    let mut delegs: Vec<(q16::StakeAddr, Bytes)> = Vec::new();
+    let mut rewards: Vec<(q16::StakeAddr, u64)> = Vec::new();
+
+    for stake_addr in stake_addrs.iter() {
+        // Convert StakeAddr to StakeCredential for lookup
+        let Some(cred) = stake_addr_to_credential(stake_addr) else {
+            debug!("failed to convert stake addr to credential");
+            continue;
+        };
+
+        // Encode credential as entity key
+        let key_bytes = pallas::codec::minicbor::to_vec(&cred)
+            .map_err(|e| Error::server(format!("failed to encode credential: {}", e)))?;
+        let entity_key = dolos_core::EntityKey::from(key_bytes.as_slice());
+
+        // Look up account state
+        let account: Option<AccountState> = state
+            .read_entity_typed(AccountState::NS, &entity_key)
+            .map_err(|e| Error::server(format!("failed to read account: {}", e)))?;
+
+        if let Some(account) = account {
+            // Only include registered accounts
+            if !account.is_registered() {
+                continue;
+            }
+
+            // Get the delegated pool (if any)
+            if let Some(pool_delegation) = account.pool.live() {
+                if let PoolDelegation::Pool(pool_hash) = pool_delegation {
+                    delegs.push((stake_addr.clone(), Bytes::from(pool_hash.as_ref().to_vec())));
+                }
+            }
+
+            // Get withdrawable rewards
+            if let Some(stake) = account.stake.live() {
+                let withdrawable = stake.withdrawable();
+                rewards.push((stake_addr.clone(), withdrawable));
+            }
+        }
+    }
+
+    debug!(
+        num_delegs = delegs.len(),
+        num_rewards = rewards.len(),
+        "returning stake address info"
+    );
+
+    let response = q16::FilteredDelegsRewards {
+        delegs: KeyValuePairs::Def(delegs),
+        rewards: KeyValuePairs::Def(rewards),
+    };
+
+    Ok(AnyCbor::from_encode((response,)))
 }
