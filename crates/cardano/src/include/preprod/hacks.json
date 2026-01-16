@@ -16,16 +16,19 @@
     "proposals": [
         {
             "id": "9972ffaee13b4afcf1a133434161ce25e8ecaf34b7a76e06b0c642125cf911a9#0",
+            "description": "Byron intra-era hardfork",
             "outcome": "ratified",
             "epoch": 1
         },
         {
             "id": "f48fffc65e16c3808720b38110a6d284250360108b6198a44331eb0de8e49817#0",
+            "description": "Shelley hardfork",
             "outcome": "ratified",
             "epoch": 3
         },
         {
             "id": "82b8de69d2ddd8b926e2af5979dc55ec18282d73bfe009c25bea9ef75e3fe11e#0",
+            "description": "delayed pparam update",
             "outcome": "ratified",
             "epoch": 27
         },

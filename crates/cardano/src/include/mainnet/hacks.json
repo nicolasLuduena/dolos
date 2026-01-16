@@ -2,34 +2,256 @@
     "pointers": [],
     "proposals": [
         {
+            "description": "Replace Interim Constitutional Committee",
             "id": "47a0e7a4f9383b1afc2192b23b41824d65ac978d7741aca61fc1fa16833d1111#0",
             "outcome": "ratified",
             "epoch": 580
         },
         {
+            "description": "Withdraw ₳99,600 for BloxBean Java Tools Maintenance and Enhancement",
             "id": "2c7f900b7ff68f317a7b0e42231d4aed36227660baf2ee9a4be7e880eb977313#0",
             "outcome": "ratified",
             "epoch": 575
         },
         {
+            "description": "Withdraw ₳104,347 for MLabs Research towards Tooling for Elliptical Curves...",
             "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#36",
             "outcome": "ratified",
             "epoch": 575
         },
         {
+            "description": "Withdraw ₳750,000 for Cardano Product Committee: Community-driven 2030 Carda...",
             "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#35",
             "outcome": "ratified",
             "epoch": 577
         },
         {
+            "description": "Withdraw ₳314,800 for PyCardano administered by Intersect",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#34",
+            "outcome": "ratified",
+            "epoch": 575
+        },
+        {
+            "description": "Withdraw ₳199,911 for OpShin - Python Smart Contracts for Cardano",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#33",
+            "outcome": "ratified",
+            "epoch": 575
+        },
+        {
+            "description": "Withdraw ₳26,840,000 for Input Output Research (IOR): Cardano Vision - Wor...",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#32",
+            "outcome": "ratified",
+            "epoch": 575
+        },
+        {
+            "description": "Withdraw ₳4,000,000 for Expanding Stablecoin / Cardano Native Asset Support...",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#31",
+            "outcome": "ratified",
+            "epoch": 575
+        },
+        {
+            "description": "Withdraw ₳889,500 for Cardano Ecosystem Pavilions at Exhibitions",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#29",
+            "outcome": "ratified",
+            "epoch": 577
+        },
+        {
+            "description": "Withdraw ₳3,126,000 for Ecosystem Exchange Listing and Market Making service...",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#28",
+            "outcome": "ratified",
+            "epoch": 577
+        },
+        {
+            "description": "Withdraw ₳12,000,000 for Cardano Builder DAO administered by Intersect",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#26",
+            "outcome": "ratified",
+            "epoch": 576
+        },
+        {
+            "description": "Withdraw ₳6,000,000 for Unveiling the First Unified Global Events Marketing S...",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#25",
+            "outcome": "ratified",
+            "epoch": 576
+        },
+        {
+            "description": "Withdraw ₳6,000,000 for Cardano Summit 2025 and regional tech events",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#24",
+            "outcome": "ratified",
+            "epoch": 575
+        },
+        {
+            "description": "Withdraw ₳69,459,000 for Catalyst 2025 Proposal by Input Output: Advancing De...",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#23",
+            "outcome": "ratified",
+            "epoch": 574
+        },
+        {
+            "description": "Withdraw ₳592,780 for Beyond Minimum Viable Governance: Iteratively Improvin....",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#22",
+            "outcome": "ratified",
+            "epoch": 577
+        },
+        {
+            "description": "Withdraw ₳15,750,000 for a MBO for the Cardano ecosystem: Intersect",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#21",
+            "outcome": "ratified",
+            "epoch": 575
+        },
+        {
+            "description": "Withdraw ₳212,000 for AdaStat.net Cardano blockchain explorer",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#20",
+            "outcome": "ratified",
+            "epoch": 575
+        },
+        {
+            "description": "Withdraw ₳605,000 for A free Native Asset CDN for Cardano Developers",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#19",
+            "outcome": "ratified",
+            "epoch": 577
+        },
+        {
+            "description": "Withdraw ₳266,667 for Cexplorer.io -- Developer-Focused Blockchain Explorer...",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#18",
+            "outcome": "ratified",
+            "epoch": 575
+        },
+        {
+            "description": "Withdraw ₳657,692 for Scalus - DApps Development Platform",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#1",
+            "outcome": "ratified",
+            "epoch": 575
+        },
+        {
+            "description": "Withdraw ₳583,000 for Eternl Maintenance administered by Intersect",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#16",
+            "outcome": "ratified",
+            "epoch": 575
+        },
+        {
+            "description": "Withdraw ₳700,000 for ZK Bridge administered by Intersect",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#15",
+            "outcome": "ratified",
+            "epoch": 575
+        },
+        {
+            "description": "Withdraw ₳11,070,323 for TWEAG's Proposals for multiple core budget project...",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#14",
+            "outcome": "ratified",
+            "epoch": 575
+        },
+        {
+            "description": "Withdraw ₳243,478 for MLabs Core Tool Maintenance & Enhancement: Plutarch",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#13",
+            "outcome": "ratified",
+            "epoch": 575
+        },
+        {
+            "description": "Withdraw ₳578,571 for Gerolamo - Cardano node in typescript",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#12",
+            "outcome": "ratified",
+            "epoch": 575
+        },
+        {
+            "description": "Withdraw ₳5,885,000 for OSC Budget Proposal - Paid Open Source Model...",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#11",
+            "outcome": "ratified",
+            "epoch": 575
+        },
+        {
+            "description": "Withdraw ₳600,000 for Complete Web3 developer stack to make Cardano the smart...",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#10",
+            "outcome": "ratified",
+            "epoch": 575
+        },
+        {
+            "description": "Withdraw ₳300,000 for Ledger App Rewrite administered by Intersect",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#9",
+            "outcome": "ratified",
+            "epoch": 575
+        },
+        {
+            "description": "Withdraw ₳220,914 for Dolos: Sustaining a Lightweight Cardano Data Node",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#8",
+            "outcome": "ratified",
+            "epoch": 575
+        },
+        {
+            "description": "Withdraw ₳1,161,000 for zkFold ZK Rollup administered by Intersect",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#7",
+            "outcome": "ratified",
+            "epoch": 575
+        },
+        {
+            "description": "Withdraw ₳130,903 for Lucid Evolution Maintenance administered by Intersect",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#6",
+            "outcome": "ratified",
+            "epoch": 575
+        },
+        {
+            "description": "Withdraw ₳220,914 for UTxO RPC: Sustaining Cardano Blockchain Integration",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#5",
+            "outcome": "ratified",
+            "epoch": 575
+        },
+        {
+            "description": "Withdraw ₳220,914 for Pallas: Sustaining Critical Rust Tooling for Cardano",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#4",
+            "outcome": "ratified",
+            "epoch": 575
+        },
+        {
+            "description": "Withdraw ₳424,800 for Hardware Wallets Maintenance administered by Intersect",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#3",
+            "outcome": "ratified",
+            "epoch": 575
+        },
+        {
+            "description": "Withdraw ₳1,300,000 for Blockfrost Platform community budget proposal",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#2",
+            "outcome": "ratified",
+            "epoch": 575
+        },
+        {
+            "description": "Withdraw ₳96,817,080 for 2025 Input Output Engineering Core Development Proposal",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#1",
+            "outcome": "ratified",
+            "epoch": 574
+        },
+        {
+            "description": "Withdraw ₳2,162,096 for Midgard - Optimistic Rollups administered by Intersect",
+            "id": "8ad3d454f3496a35cb0d07b0fd32f687f66338b7d60e787fc0a22939e5d8833e#0",
+            "outcome": "ratified",
+            "epoch": 574
+        },
+        {
+            "description": "Withdraw ₳45,217 for MLabs Core Tool Maintenance & Enhancement: Cardano.nix",
+            "id": "3cf29192a0ee1a77985054072edcdb566ac14707730637c4635d8fb6813cb4c9#0",
+            "outcome": "ratified",
+            "epoch": 575
+        },
+        {
+            "description": "Amaru Treasury Withdrawal 2025",
+            "id": "60ed6ab43c840ff888a8af30a1ed27b41e9f4a91a89822b2b63d1bfc52aeec45#0",
+            "outcome": "ratified",
+            "epoch": 570
+        },
+        {
+            "description": "Cardano Constitution to Replace the Interim Constitution",
             "id": "8c653ee5c9800e6d31e79b5a7f7d4400c81d44717ad4db633dc18d4c07e4a4fd#0",
             "outcome": "ratified",
             "epoch": 541
         },
         {
+            "description": "Hard Fork to Protocol Version 10 ('Plomin' Hard Fork)",
             "id": "0b19476e40bbbb5e1e8ce153523762e2b6859e7ecacbaf06eae0ee6a447e79b9#0",
             "outcome": "ratified",
             "epoch": 536
+        },
+        {
+            "description": "Plutus V3 Cost Model Parameter Changes Prior to Chang#2",
+            "id": "b2a591ac219ce6dcca5847e0248015209c7cb0436aa6bd6863d0c1f152a60bc5#0",
+            "outcome": "ratified",
+            "epoch": 525
         }
     ]
 }
