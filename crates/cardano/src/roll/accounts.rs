@@ -16,7 +16,7 @@ use tracing::debug;
 
 use crate::model::FixedNamespace as _;
 use crate::{model::AccountState, pallas_extras, roll::BlockVisitor};
-use crate::{CardanoLogic, DRepDelegation, PParamsSet, PoolDelegation};
+use crate::{CardanoLogic, DRepDelegation, PParamsSet, PoolDelegation, PoolHash};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrackSeenAddresses {
@@ -171,6 +171,7 @@ pub struct StakeDelegation {
 
     // undo
     prev_pool: Option<PoolDelegation>,
+    prev_retired_pool: Option<PoolHash>,
 }
 
 impl StakeDelegation {
@@ -180,6 +181,7 @@ impl StakeDelegation {
             pool,
             epoch,
             prev_pool: None,
+            prev_retired_pool: None,
         }
     }
 }
@@ -199,17 +201,20 @@ impl dolos_core::EntityDelta for StakeDelegation {
 
         // save undo
         self.prev_pool = entity.pool.live().cloned();
+        self.prev_retired_pool = entity.retired_pool;
 
         // apply changes
         entity
             .pool
             .replace(PoolDelegation::Pool(self.pool), self.epoch);
+        entity.retired_pool = None;
     }
 
     fn undo(&self, entity: &mut Option<AccountState>) {
         let entity = entity.as_mut().expect("existing account");
 
         entity.pool.reset(self.prev_pool.clone());
+        entity.retired_pool = self.prev_retired_pool;
     }
 }
 
