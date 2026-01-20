@@ -300,11 +300,15 @@ impl<D: Domain> Session<D> {
                 _era,
                 q16::BlockQuery::GetFilteredDelegationsAndRewardAccounts(ref stake_addrs),
             ))) => {
-                info!(
-                    num_addrs = stake_addrs.len(),
-                    "GetFilteredDelegationsAndRewardAccounts query"
-                );
+                info!("GetFilteredDelegationsAndRewardAccounts query");
                 build_stake_address_info_response(&self.domain, stake_addrs)?
+            }
+            Ok(q16::Request::LedgerQuery(q16::LedgerQuery::BlockQuery(
+                _era,
+                q16::BlockQuery::GetStakeDelegDeposits(ref stake_addrs),
+            ))) => {
+                info!("GetStakeDelegDeposits query");
+                statequery_utils::build_stake_deleg_deposits_response(&self.domain, stake_addrs)?
             }
 
             Ok(req) => {
