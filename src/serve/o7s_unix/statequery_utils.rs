@@ -4,7 +4,7 @@ use dolos_cardano::{
 };
 use dolos_core::StateStore;
 use pallas::codec::minicbor::{self, Decode, Encode, Encoder};
-use pallas::codec::utils::{AnyCbor, AnyUInt, Bytes, KeyValuePairs, Nullable};
+use pallas::codec::utils::{AnyCbor, AnyUInt, Bytes, KeyValuePairs, Nullable, TagWrap};
 use pallas::crypto::hash::Hash;
 use pallas::ledger::primitives::StakeCredential;
 use pallas::ledger::traverse::{MultiEraOutput, OriginalHash};
@@ -40,34 +40,54 @@ impl<'a, C> minicbor::Encode<C> for EraHistoryResponse<'a> {
         _ctx: &mut C,
     ) -> Result<(), minicbor::encode::Error<W::Error>> {
         encoder.array(self.eras.len() as u64)?;
+
         for era in self.eras {
             encoder.array(3)?;
+
             // Start Bound
             encoder.array(3)?;
-            let start_relative_time = era.start.timestamp.saturating_sub(self.system_start);
-            encoder.u64(start_relative_time)?;
+            let start_relative_time = era.start.timestamp.saturating_sub(self.system_start) as u128;
+            let start_relative_picos = start_relative_time
+                .saturating_mul(1_000_000_000_000u128)
+                .min(u64::MAX as u128) as u64;
+            encoder.u64(start_relative_picos)?;
             encoder.u64(era.start.slot)?;
             encoder.u64(era.start.epoch)?;
+
             // EraEnd
-            match &era.end {
+            let era_is_open_ended = match &era.end {
                 Some(end) => {
-                    encoder.array(3)?;
-                    let end_relative_time = end.timestamp.saturating_sub(self.system_start);
-                    encoder.u64(end_relative_time)?;
-                    encoder.u64(end.slot)?;
-                    encoder.u64(end.epoch)?;
+                    let end_relative_time = end.timestamp.saturating_sub(self.system_start) as u128;
+                    let end_relative_picos =
+                        end_relative_time.saturating_mul(1_000_000_000_000u128);
+                    // If the time would overflow u64, treat this era as open-ended
+                    if end_relative_picos > u64::MAX as u128 {
+                        encoder.null()?;
+                        true
+                    } else {
+                        encoder.array(3)?;
+                        encoder.u64(end_relative_picos as u64)?;
+                        encoder.u64(end.slot)?;
+                        encoder.u64(end.epoch)?;
+                        false
+                    }
                 }
                 None => {
                     encoder.null()?;
+                    true
                 }
-            }
+            };
+
             // EraParams
             encoder.array(4)?;
             encoder.u64(era.epoch_length)?;
-            encoder.u64(era.slot_length * 1000)?;
+            encoder.u64(era.slot_length.saturating_mul(1000))?;
+
             let safe_from_tip = self.security_param * 2;
+
             // SafeZone
-            if era.end.is_none() {
+            if era_is_open_ended {
+                // UnsafeIndefiniteSafeZone: [1, 1]
                 encoder.array(1)?;
                 encoder.u8(1)?;
             } else {
@@ -90,6 +110,7 @@ pub fn build_era_history_response(
     if eras.is_empty() {
         return Err(Error::server("era summary is empty"));
     }
+
     let system_start = genesis
         .shelley
         .system_start
@@ -97,16 +118,210 @@ pub fn build_era_history_response(
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.timestamp() as u64)
         .ok_or_else(|| Error::server("invalid system start"))?;
+
     let security_param = genesis
         .shelley
         .security_param
         .ok_or_else(|| Error::server("missing security param"))?;
+
     let resp = EraHistoryResponse {
         eras,
         system_start,
         security_param: security_param.into(),
     };
+
     Ok(AnyCbor::from_encode(resp))
+}
+
+fn convert_output_to_q16(output: &MultiEraOutput) -> Result<q16::TransactionOutput, Error> {
+    use pallas::codec::utils::NonEmptyKeyValuePairs;
+    use pallas::ledger::primitives::conway::DatumOption;
+
+    let address = output.address().map_err(Error::server)?.to_vec();
+
+    let value_data = output.value();
+    let lovelace = AnyUInt::U64(value_data.coin());
+
+    let assets = value_data.assets();
+    let has_assets = !assets.is_empty();
+
+    let value = if has_assets {
+        let mut policy_map: Vec<(
+            pallas::crypto::hash::Hash<28>,
+            NonEmptyKeyValuePairs<pallas::codec::utils::Bytes, AnyUInt>,
+        )> = vec![];
+
+        for policy_assets in assets {
+            let policy_id = *policy_assets.policy();
+            let mut asset_entries: Vec<(pallas::codec::utils::Bytes, AnyUInt)> = vec![];
+
+            for asset in policy_assets.assets() {
+                let name = asset.name();
+                let amount = asset.output_coin().unwrap_or(0);
+                asset_entries.push((name.to_vec().into(), AnyUInt::U64(amount)));
+            }
+
+            if !asset_entries.is_empty() {
+                policy_map.push((policy_id, NonEmptyKeyValuePairs::Def(asset_entries)));
+            }
+        }
+
+        if policy_map.is_empty() {
+            q16::Value::Coin(lovelace)
+        } else {
+            q16::Value::Multiasset(lovelace, NonEmptyKeyValuePairs::Def(policy_map))
+        }
+    } else {
+        q16::Value::Coin(lovelace)
+    };
+
+    let inline_datum = output.datum().map(|d| match d {
+        DatumOption::Hash(h) => q16::DatumOption::Hash(h),
+        DatumOption::Data(data) => {
+            q16::DatumOption::Data(pallas::codec::utils::CborWrap(convert_plutus_data(&data.0)))
+        }
+    });
+
+    let datum_hash = output.datum().map(|d| match d {
+        DatumOption::Hash(h) => h,
+        DatumOption::Data(data) => data.original_hash(),
+    });
+
+    if output.era() >= pallas::ledger::traverse::Era::Alonzo {
+        Ok(q16::TransactionOutput::Current(
+            q16::PostAlonsoTransactionOutput {
+                address: address.into(),
+                amount: value,
+                inline_datum,
+                script_ref: None,
+            },
+        ))
+    } else {
+        Ok(q16::TransactionOutput::Legacy(
+            q16::LegacyTransactionOutput {
+                address: address.into(),
+                amount: value,
+                datum_hash,
+            },
+        ))
+    }
+}
+
+fn convert_plutus_data(data: &pallas::ledger::primitives::PlutusData) -> q16::PlutusData {
+    match data {
+        pallas::ledger::primitives::PlutusData::Constr(constr) => {
+            let fields = constr
+                .fields
+                .iter()
+                .map(convert_plutus_data)
+                .collect::<Vec<_>>();
+            q16::PlutusData::Constr(q16::Constr {
+                tag: constr.tag,
+                any_constructor: constr.any_constructor,
+                fields: pallas::codec::utils::MaybeIndefArray::Indef(fields),
+            })
+        }
+        pallas::ledger::primitives::PlutusData::Map(kvs) => {
+            let mapped = kvs
+                .iter()
+                .map(|(k, v)| (convert_plutus_data(k), convert_plutus_data(v)))
+                .collect::<Vec<_>>();
+            q16::PlutusData::Map(KeyValuePairs::Def(mapped))
+        }
+        pallas::ledger::primitives::PlutusData::BigInt(bi) => match bi {
+            pallas::ledger::primitives::BigInt::Int(i) => {
+                q16::PlutusData::BigInt(q16::BigInt::Int(*i))
+            }
+            pallas::ledger::primitives::BigInt::BigUInt(bytes) => {
+                let raw: Vec<u8> = bytes.clone().into();
+                q16::PlutusData::BigInt(q16::BigInt::BigUInt(raw.into()))
+            }
+            pallas::ledger::primitives::BigInt::BigNInt(bytes) => {
+                let raw: Vec<u8> = bytes.clone().into();
+                q16::PlutusData::BigInt(q16::BigInt::BigNInt(raw.into()))
+            }
+        },
+        pallas::ledger::primitives::PlutusData::BoundedBytes(bytes) => {
+            let raw: Vec<u8> = bytes.clone().into();
+            q16::PlutusData::BoundedBytes(raw.into())
+        }
+        pallas::ledger::primitives::PlutusData::Array(arr) => {
+            let items = arr.iter().map(convert_plutus_data).collect::<Vec<_>>();
+            q16::PlutusData::Array(pallas::codec::utils::MaybeIndefArray::Indef(items))
+        }
+    }
+}
+
+pub fn build_utxo_by_address_response<D: Domain>(
+    domain: &D,
+    addrs: &q16::Addrs,
+) -> Result<AnyCbor, Error> {
+    use pallas::ledger::addresses::Address;
+
+    let mut utxo_pairs: Vec<(q16::UTxO, q16::TransactionOutput)> = Vec::new();
+
+    let mut all_refs = std::collections::HashSet::new();
+    for addr in addrs.iter() {
+        let addr_bytes: &[u8] = addr.as_ref();
+        debug!(addr_len = addr_bytes.len(), addr_hex = %hex::encode(addr_bytes), "looking up utxos for address");
+
+        let mut refs = domain
+            .state()
+            .get_utxo_by_address(addr_bytes)
+            .map_err(|e| Error::server(format!("failed to get utxos by address: {}", e)))?;
+
+        debug!(num_refs = refs.len(), "found utxo refs by full address");
+
+        if refs.is_empty() {
+            if let Ok(Address::Shelley(shelley_addr)) = Address::from_bytes(addr_bytes) {
+                let payment_bytes = shelley_addr.payment().to_vec();
+                debug!(payment_hex = %hex::encode(&payment_bytes), "trying payment credential lookup");
+                refs = domain
+                    .state()
+                    .get_utxo_by_payment(&payment_bytes)
+                    .map_err(|e| Error::server(format!("failed to get utxos by payment: {}", e)))?;
+                debug!(
+                    num_refs = refs.len(),
+                    "found utxo refs by payment credential"
+                );
+            }
+        }
+
+        all_refs.extend(refs);
+    }
+
+    debug!(
+        total_refs = all_refs.len(),
+        "total unique utxo refs to fetch"
+    );
+
+    let refs_vec: Vec<_> = all_refs.into_iter().collect();
+    let utxos = domain
+        .state()
+        .get_utxos(refs_vec.clone())
+        .map_err(|e| Error::server(format!("failed to get utxos: {}", e)))?;
+
+    debug!(fetched_utxos = utxos.len(), "fetched utxo data");
+
+    for utxo_ref in refs_vec {
+        if let Some(era_cbor) = utxos.get(&utxo_ref) {
+            let output = MultiEraOutput::try_from(era_cbor.as_ref())
+                .map_err(|e| Error::server(format!("failed to decode utxo: {}", e)))?;
+            let q16_utxo = q16::UTxO {
+                transaction_id: utxo_ref.0,
+                index: AnyUInt::U32(utxo_ref.1),
+            };
+
+            let q16_output = convert_output_to_q16(&output)?;
+            utxo_pairs.push((q16_utxo, q16_output));
+        }
+    }
+
+    debug!(num_utxos = utxo_pairs.len(), "returning utxos");
+
+    let response: KeyValuePairs<q16::UTxO, q16::TransactionOutput> = KeyValuePairs::Def(utxo_pairs);
+
+    Ok(AnyCbor::from_encode((response,)))
 }
 
 pub fn build_protocol_params<D: Domain>(domain: &D) -> Result<q16::ProtocolParam, Error> {
@@ -178,7 +393,7 @@ pub fn build_protocol_params<D: Domain>(domain: &D) -> Result<q16::ProtocolParam
         pool_pledge_influence: pparams.pool_pledge_influence().map(|r| to_q16_rational(&r)),
         expansion_rate: pparams.expansion_rate().map(|r| to_q16_rational(&r)),
         treasury_growth_rate: pparams.treasury_growth_rate().map(|r| to_q16_rational(&r)),
-        protocol_version: pparams.protocol_version().map(|v| (v.0 as u64, v.1 as u64)),
+        protocol_version: pparams.protocol_version().map(|v| (v.0, v.1)),
         min_pool_cost: pparams.min_pool_cost().map(AnyUInt::U64),
         ada_per_utxo_byte: pparams.ada_per_utxo_byte().map(AnyUInt::U64),
         cost_models_for_script_languages: Some(to_q16_cost_models(
@@ -207,187 +422,16 @@ pub fn build_protocol_params<D: Domain>(domain: &D) -> Result<q16::ProtocolParam
             .map(|r| to_q16_rational(&r)),
     })
 }
-
-pub fn convert_output_to_q16(output: &MultiEraOutput) -> Result<q16::TransactionOutput, Error> {
-    use pallas::codec::utils::NonEmptyKeyValuePairs;
-    use pallas::ledger::primitives::conway::DatumOption;
-    let address = output.address().map_err(Error::server)?.to_vec();
-    let value_data = output.value();
-    let lovelace = AnyUInt::U64(value_data.coin());
-    let assets = value_data.assets();
-    let has_assets = !assets.is_empty();
-    let value = if has_assets {
-        let mut policy_map: Vec<(
-            pallas::crypto::hash::Hash<28>,
-            NonEmptyKeyValuePairs<pallas::codec::utils::Bytes, AnyUInt>,
-        )> = vec![];
-        for policy_assets in assets {
-            let policy_id = *policy_assets.policy();
-            let mut asset_entries: Vec<(pallas::codec::utils::Bytes, AnyUInt)> = vec![];
-            for asset in policy_assets.assets() {
-                let name = asset.name();
-                let amount = asset.output_coin().unwrap_or(0);
-                asset_entries.push((name.to_vec().into(), AnyUInt::U64(amount)));
-            }
-            if !asset_entries.is_empty() {
-                policy_map.push((policy_id, NonEmptyKeyValuePairs::Def(asset_entries)));
-            }
-        }
-        if policy_map.is_empty() {
-            q16::Value::Coin(lovelace)
-        } else {
-            q16::Value::Multiasset(lovelace, NonEmptyKeyValuePairs::Def(policy_map))
-        }
-    } else {
-        q16::Value::Coin(lovelace)
-    };
-    let inline_datum = output.datum().and_then(|d| match d {
-        DatumOption::Hash(h) => Some(q16::DatumOption::Hash(h)),
-        DatumOption::Data(data) => Some(q16::DatumOption::Data(pallas::codec::utils::CborWrap(
-            convert_plutus_data(&data.0),
-        ))),
-    });
-    let datum_hash = output.datum().and_then(|d| match d {
-        DatumOption::Hash(h) => Some(h),
-        DatumOption::Data(data) => Some(data.original_hash()),
-    });
-    if output.era() >= pallas::ledger::traverse::Era::Alonzo {
-        Ok(q16::TransactionOutput::Current(
-            q16::PostAlonsoTransactionOutput {
-                address: address.into(),
-                amount: value,
-                inline_datum,
-                script_ref: None,
-            },
-        ))
-    } else {
-        Ok(q16::TransactionOutput::Legacy(
-            q16::LegacyTransactionOutput {
-                address: address.into(),
-                amount: value,
-                datum_hash,
-            },
-        ))
-    }
-}
-
-pub fn convert_plutus_data(data: &pallas::ledger::primitives::PlutusData) -> q16::PlutusData {
-    match data {
-        pallas::ledger::primitives::PlutusData::Constr(constr) => {
-            let fields = constr
-                .fields
-                .iter()
-                .map(convert_plutus_data)
-                .collect::<Vec<_>>();
-            q16::PlutusData::Constr(q16::Constr {
-                tag: constr.tag,
-                any_constructor: constr.any_constructor,
-                fields: pallas::codec::utils::MaybeIndefArray::Indef(fields),
-            })
-        }
-        pallas::ledger::primitives::PlutusData::Map(kvs) => {
-            let mapped = kvs
-                .iter()
-                .map(|(k, v)| (convert_plutus_data(k), convert_plutus_data(v)))
-                .collect::<Vec<_>>();
-            q16::PlutusData::Map(KeyValuePairs::Def(mapped))
-        }
-        pallas::ledger::primitives::PlutusData::BigInt(bi) => match bi {
-            pallas::ledger::primitives::BigInt::Int(i) => {
-                q16::PlutusData::BigInt(q16::BigInt::Int(*i))
-            }
-            pallas::ledger::primitives::BigInt::BigUInt(bytes) => {
-                let raw: Vec<u8> = bytes.clone().into();
-                q16::PlutusData::BigInt(q16::BigInt::BigUInt(raw.into()))
-            }
-            pallas::ledger::primitives::BigInt::BigNInt(bytes) => {
-                let raw: Vec<u8> = bytes.clone().into();
-                q16::PlutusData::BigInt(q16::BigInt::BigNInt(raw.into()))
-            }
-        },
-        pallas::ledger::primitives::PlutusData::BoundedBytes(bytes) => {
-            let raw: Vec<u8> = bytes.clone().into();
-            q16::PlutusData::BoundedBytes(raw.into())
-        }
-        pallas::ledger::primitives::PlutusData::Array(arr) => {
-            let items = arr.iter().map(convert_plutus_data).collect::<Vec<_>>();
-            q16::PlutusData::Array(pallas::codec::utils::MaybeIndefArray::Indef(items))
-        }
-    }
-}
-
-pub fn build_utxo_by_address_response<D: Domain>(
-    domain: &D,
-    addrs: &q16::Addrs,
-) -> Result<AnyCbor, Error> {
-    use pallas::ledger::addresses::Address;
-    let mut utxo_pairs: Vec<(q16::UTxO, q16::TransactionOutput)> = Vec::new();
-    let mut all_refs = std::collections::HashSet::new();
-    for addr in addrs.iter() {
-        let addr_bytes: &[u8] = addr.as_ref();
-        debug!(addr_len = addr_bytes.len(), addr_hex = %hex::encode(addr_bytes), "looking up utxos for address");
-        let mut refs = domain
-            .state()
-            .get_utxo_by_address(addr_bytes)
-            .map_err(|e| Error::server(format!("failed to get utxos by address: {}", e)))?;
-        debug!(num_refs = refs.len(), "found utxo refs by full address");
-        if refs.is_empty() {
-            if let Ok(Address::Shelley(shelley_addr)) = Address::from_bytes(addr_bytes) {
-                let payment_bytes = shelley_addr.payment().to_vec();
-                debug!(payment_hex = %hex::encode(&payment_bytes), "trying payment credential lookup");
-                refs = domain
-                    .state()
-                    .get_utxo_by_payment(&payment_bytes)
-                    .map_err(|e| Error::server(format!("failed to get utxos by payment: {}", e)))?;
-                debug!(
-                    num_refs = refs.len(),
-                    "found utxo refs by payment credential"
-                );
-            }
-        }
-        all_refs.extend(refs);
-    }
-    debug!(
-        total_refs = all_refs.len(),
-        "total unique utxo refs to fetch"
-    );
-    let refs_vec: Vec<_> = all_refs.into_iter().collect();
-    let utxos = domain
-        .state()
-        .get_utxos(refs_vec.clone())
-        .map_err(|e| Error::server(format!("failed to get utxos: {}", e)))?;
-    debug!(fetched_utxos = utxos.len(), "fetched utxo data");
-    for utxo_ref in refs_vec {
-        if let Some(era_cbor) = utxos.get(&utxo_ref) {
-            let output = MultiEraOutput::try_from(era_cbor.as_ref())
-                .map_err(|e| Error::server(format!("failed to decode utxo: {}", e)))?;
-            let q16_utxo = q16::UTxO {
-                transaction_id: utxo_ref.0,
-                index: AnyUInt::U32(utxo_ref.1),
-            };
-            let q16_output = convert_output_to_q16(&output)?;
-            utxo_pairs.push((q16_utxo, q16_output));
-        }
-    }
-    debug!(num_utxos = utxo_pairs.len(), "returning utxos");
-    let response: KeyValuePairs<q16::UTxO, q16::TransactionOutput> = KeyValuePairs::Def(utxo_pairs);
-    Ok(AnyCbor::from_encode((response,)))
-}
-
-fn convert_pool_params(params: &dolos_cardano::PoolParams) -> q16::PoolParams {
+fn convert_pool_params(operator: &[u8], params: &dolos_cardano::PoolParams) -> q16::PoolParams {
     let relays: Vec<q16::Relay> = params
         .relays
         .iter()
         .map(|r| match r {
             pallas::ledger::primitives::Relay::SingleHostAddr(port, ipv4, ipv6) => {
-                q16::Relay::SingleHostAddr(
-                    port.clone().into(),
-                    ipv4.clone().into(),
-                    ipv6.clone().into(),
-                )
+                q16::Relay::SingleHostAddr((*port).into(), ipv4.clone().into(), ipv6.clone().into())
             }
             pallas::ledger::primitives::Relay::SingleHostName(port, dns) => {
-                q16::Relay::SingleHostName(port.clone().into(), dns.clone())
+                q16::Relay::SingleHostName((*port).into(), dns.clone())
             }
             pallas::ledger::primitives::Relay::MultiHostName(dns) => {
                 q16::Relay::MultiHostName(dns.clone())
@@ -404,7 +448,7 @@ fn convert_pool_params(params: &dolos_cardano::PoolParams) -> q16::PoolParams {
     };
 
     q16::PoolParams {
-        operator: params.vrf_keyhash.to_vec().into(),
+        operator: operator.to_vec().into(),
         vrf_keyhash: params.vrf_keyhash.to_vec().into(),
         pledge: AnyUInt::U64(params.pledge),
         cost: AnyUInt::U64(params.cost),
@@ -438,7 +482,6 @@ pub fn build_pool_state_response<D: Domain>(
     // Extract the filter set if provided
     let filter_set: Option<BTreeSet<Vec<u8>>> = match pools_filter {
         SMaybe::Some(pools) => {
-            // pools is a TagWrap<BTreeSet<Bytes>, 258>, access inner via .0
             let set: BTreeSet<Vec<u8>> = pools.0.iter().map(|p| p.to_vec()).collect();
             Some(set)
         }
@@ -461,26 +504,33 @@ pub fn build_pool_state_response<D: Domain>(
         }
 
         let pool_id: Bytes = pool_id_bytes.into();
-        let live_snapshot = pool.snapshot.unwrap_live();
+
+        let live_snapshot_opt = pool.snapshot.live();
+        let live_snapshot = match live_snapshot_opt {
+            Some(ls) => ls,
+            None => continue,
+        };
 
         if live_snapshot.is_retired {
             continue;
         }
 
-        stake_pool_params.insert(pool_id.clone(), convert_pool_params(&live_snapshot.params));
+        stake_pool_params.insert(
+            pool_id.clone(),
+            convert_pool_params(pool_id.as_ref(), &live_snapshot.params),
+        );
 
-        // Add future params if scheduled
         if let Some(next_snapshot) = pool.snapshot.next() {
-            future_stake_pool_params
-                .insert(pool_id.clone(), convert_pool_params(&next_snapshot.params));
+            future_stake_pool_params.insert(
+                pool_id.clone(),
+                convert_pool_params(pool_id.as_ref(), &next_snapshot.params),
+            );
         }
 
-        // Add retiring epoch if pool is retiring
         if let Some(retiring_epoch) = pool.retiring_epoch {
             retiring.insert(pool_id.clone(), retiring_epoch as u32);
         }
 
-        // Add deposit
         deposits.insert(pool_id, AnyUInt::U64(pool.deposit));
     }
 
@@ -498,7 +548,11 @@ pub fn build_pool_state_response<D: Domain>(
         deposits,
     };
 
-    Ok(AnyCbor::from_encode((pstate,)))
+    let encoded = minicbor::to_vec(pstate)
+        .map_err(|e| Error::server(format!("failed to encode pool state: {e}")))?;
+
+    let wrapped = TagWrap::<Bytes, 24>(encoded.into());
+    Ok(AnyCbor::from_encode(vec![wrapped]))
 }
 
 /// Convert a q16::StakeAddr to a pallas StakeCredential
