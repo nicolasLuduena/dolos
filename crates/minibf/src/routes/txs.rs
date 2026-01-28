@@ -15,9 +15,11 @@ use blockfrost_openapi::models::{
     tx_content_withdrawals_inner::TxContentWithdrawalsInner,
 };
 
-use dolos_core::{ArchiveStore, Domain};
+use dolos_cardano::indexes::CardanoQueryExt;
+use dolos_core::Domain;
 
 use crate::{
+    log_and_500,
     mapping::{IntoModel as _, TxModelBuilder},
     Facade,
 };
@@ -28,11 +30,7 @@ pub async fn by_hash<D: Domain>(
 ) -> Result<Json<TxContent>, StatusCode> {
     let hash = hex::decode(tx_hash).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let (raw, order) = domain
-        .archive()
-        .get_block_with_tx(&hash)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let (raw, order) = domain.get_block_by_tx_hash(&hash)?;
 
     let chain = domain.get_chain_summary()?;
 
@@ -49,11 +47,7 @@ pub async fn by_hash_cbor<D: Domain>(
 ) -> Result<Json<TxContentCbor>, StatusCode> {
     let hash = hex::decode(tx_hash).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let (raw, order) = domain
-        .archive()
-        .get_block_with_tx(hash.as_slice())
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let (raw, order) = domain.get_block_by_tx_hash(&hash)?;
 
     let tx = TxModelBuilder::new(&raw, order)?;
 
@@ -66,11 +60,7 @@ pub async fn by_hash_utxos<D: Domain>(
 ) -> Result<Json<TxContentUtxo>, StatusCode> {
     let hash = hex::decode(tx_hash).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let (raw, order) = domain
-        .archive()
-        .get_block_with_tx(hash.as_slice())
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let (raw, order) = domain.get_block_by_tx_hash(&hash)?;
 
     let mut builder = TxModelBuilder::new(&raw, order)?;
 
@@ -80,9 +70,9 @@ pub async fn by_hash_utxos<D: Domain>(
         .filter_map(|x| {
             let bytes: Vec<u8> = x.clone().into();
             domain
-                .archive()
-                .get_tx_by_spent_txo(&bytes)
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+                .inner
+                .tx_by_spent_txo(&bytes)
+                .map_err(log_and_500("failed to query tx by spent txo"))
                 .transpose()
                 .map(|res| res.map(|y| (x, y)))
         })
@@ -107,11 +97,7 @@ pub async fn by_hash_metadata<D: Domain>(
 ) -> Result<Json<Vec<TxContentMetadataInner>>, StatusCode> {
     let hash = hex::decode(tx_hash).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let (raw, order) = domain
-        .archive()
-        .get_block_with_tx(hash.as_slice())
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let (raw, order) = domain.get_block_by_tx_hash(&hash)?;
 
     let tx = TxModelBuilder::new(&raw, order)?;
 
@@ -124,11 +110,7 @@ pub async fn by_hash_metadata_cbor<D: Domain>(
 ) -> Result<Json<Vec<TxContentMetadataCborInner>>, StatusCode> {
     let hash = hex::decode(tx_hash).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let (raw, order) = domain
-        .archive()
-        .get_block_with_tx(hash.as_slice())
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let (raw, order) = domain.get_block_by_tx_hash(&hash)?;
 
     let builder = TxModelBuilder::new(&raw, order)?;
 
@@ -141,11 +123,7 @@ pub async fn by_hash_redeemers<D: Domain>(
 ) -> Result<Json<Vec<TxContentRedeemersInner>>, StatusCode> {
     let hash = hex::decode(tx_hash).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let (raw, order) = domain
-        .archive()
-        .get_block_with_tx(hash.as_slice())
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let (raw, order) = domain.get_block_by_tx_hash(&hash)?;
 
     let chain = domain.get_chain_summary()?;
 
@@ -171,11 +149,7 @@ pub async fn by_hash_withdrawals<D: Domain>(
 ) -> Result<Json<Vec<TxContentWithdrawalsInner>>, StatusCode> {
     let hash = hex::decode(tx_hash).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let (raw, order) = domain
-        .archive()
-        .get_block_with_tx(hash.as_slice())
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let (raw, order) = domain.get_block_by_tx_hash(&hash)?;
 
     let tx = TxModelBuilder::new(&raw, order)?;
 
@@ -188,11 +162,7 @@ pub async fn by_hash_delegations<D: Domain>(
 ) -> Result<Json<Vec<TxContentDelegationsInner>>, StatusCode> {
     let hash = hex::decode(tx_hash).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let (raw, order) = domain
-        .archive()
-        .get_block_with_tx(hash.as_slice())
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let (raw, order) = domain.get_block_by_tx_hash(&hash)?;
 
     let network = domain.get_network_id()?;
     let chain = domain.get_chain_summary()?;
@@ -210,11 +180,7 @@ pub async fn by_hash_mirs<D: Domain>(
 ) -> Result<Json<Vec<TxContentMirsInner>>, StatusCode> {
     let hash = hex::decode(tx_hash).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let (raw, order) = domain
-        .archive()
-        .get_block_with_tx(hash.as_slice())
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let (raw, order) = domain.get_block_by_tx_hash(&hash)?;
 
     let network = domain.get_network_id()?;
 
@@ -229,11 +195,7 @@ pub async fn by_hash_pool_retires<D: Domain>(
 ) -> Result<Json<Vec<TxContentPoolRetiresInner>>, StatusCode> {
     let hash = hex::decode(tx_hash).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let (raw, order) = domain
-        .archive()
-        .get_block_with_tx(hash.as_slice())
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let (raw, order) = domain.get_block_by_tx_hash(&hash)?;
 
     let tx = TxModelBuilder::new(&raw, order)?;
 
@@ -248,11 +210,7 @@ pub async fn by_hash_pool_updates<D: Domain>(
 
     let network = domain.get_network_id()?;
 
-    let (raw, order) = domain
-        .archive()
-        .get_block_with_tx(hash.as_slice())
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let (raw, order) = domain.get_block_by_tx_hash(&hash)?;
 
     let chain = domain.get_chain_summary()?;
     let tx = TxModelBuilder::new(&raw, order)?
@@ -270,11 +228,7 @@ pub async fn by_hash_stakes<D: Domain>(
 
     let network = domain.get_network_id()?;
 
-    let (raw, order) = domain
-        .archive()
-        .get_block_with_tx(hash.as_slice())
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .ok_or(StatusCode::NOT_FOUND)?;
+    let (raw, order) = domain.get_block_by_tx_hash(&hash)?;
 
     let tx = TxModelBuilder::new(&raw, order)?.with_network(network);
 

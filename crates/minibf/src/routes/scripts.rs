@@ -3,7 +3,8 @@ use axum::{
     Json,
 };
 use blockfrost_openapi::models::script_datum::ScriptDatum;
-use dolos_core::{ArchiveStore, Domain};
+use dolos_cardano::indexes::CardanoQueryExt;
+use dolos_core::Domain;
 use pallas::crypto::hash::Hash;
 use reqwest::StatusCode;
 
@@ -28,8 +29,8 @@ pub async fn by_datum_hash<D: Domain>(
     );
 
     let datum = domain
-        .archive()
-        .get_plutus_data(&datum_hash)
+        .inner
+        .plutus_data(&datum_hash)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
 

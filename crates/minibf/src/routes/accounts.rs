@@ -14,8 +14,12 @@ use blockfrost_openapi::models::{
     address_utxo_content_inner::AddressUtxoContentInner,
 };
 
-use dolos_cardano::{model::AccountState, pallas_extras, ChainSummary, RewardLog};
-use dolos_core::{ArchiveStore, Domain, EntityKey, StateStore};
+use dolos_cardano::{
+    indexes::{CardanoIndexExt, CardanoQueryExt},
+    model::AccountState,
+    pallas_extras, ChainSummary, RewardLog,
+};
+use dolos_core::{ArchiveStore as _, Domain, EntityKey};
 use pallas::{
     codec::minicbor,
     crypto::hash::Hash,
@@ -186,11 +190,13 @@ where
     Option<AccountState>: From<D::Entity>,
 {
     let pagination = Pagination::try_from(params)?;
+    pagination.enforce_max_scan_limit()?;
     let account_key = parse_account_key_param(&stake_address)?;
+    let end_slot = domain.get_tip_slot()?;
 
     let mut blocks = domain
-        .archive()
-        .iter_blocks_with_stake(&account_key.address.to_vec())
+        .inner
+        .blocks_by_stake(&account_key.address.to_vec(), 0, end_slot)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let mut items = vec![];
@@ -249,8 +255,8 @@ pub async fn by_stake_utxos<D: Domain>(
     };
 
     let refs = domain
-        .state()
-        .get_utxo_by_stake(payload)
+        .indexes()
+        .utxos_by_stake(payload)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let utxos = super::utxos::load_utxo_models(&domain, refs, pagination)?;
@@ -466,10 +472,11 @@ where
         pagination.count,
         pagination.page as usize,
     );
+    let end_slot = domain.get_tip_slot()?;
 
     let mut blocks = domain
-        .archive()
-        .iter_blocks_with_account_certs(&account_key.entity_key)
+        .inner
+        .blocks_by_account_certs(&account_key.entity_key, 0, end_slot)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     while builder.needs_more() {
@@ -500,6 +507,7 @@ where
     Option<AccountState>: From<D::Entity>,
 {
     let pagination = Pagination::try_from(params)?;
+    pagination.enforce_max_scan_limit()?;
 
     let items = by_stake_actions::<D, _, AccountDelegationContentInner>(
         &stake_address,
@@ -521,6 +529,7 @@ where
     Option<AccountState>: From<D::Entity>,
 {
     let pagination = Pagination::try_from(params)?;
+    pagination.enforce_max_scan_limit()?;
 
     let items = by_stake_actions::<D, _, AccountRegistrationContentInner>(
         &stake_address,

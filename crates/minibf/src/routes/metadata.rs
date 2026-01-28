@@ -7,7 +7,8 @@ use blockfrost_openapi::models::{
     tx_metadata_label_cbor_inner::TxMetadataLabelCborInner,
     tx_metadata_label_json_inner::TxMetadataLabelJsonInner,
 };
-use dolos_core::{ArchiveStore as _, Domain};
+use dolos_cardano::indexes::CardanoQueryExt;
+use dolos_core::Domain;
 use pallas::{
     codec::minicbor,
     crypto::hash::Hash,
@@ -127,10 +128,12 @@ async fn by_label<D: Domain>(
 ) -> Result<MetadataHistoryModelBuilder, Error> {
     let label: u64 = label.parse().map_err(|_| StatusCode::BAD_REQUEST)?;
     let pagination = Pagination::try_from(pagination)?;
+    pagination.enforce_max_scan_limit()?;
+    let end_slot = domain.get_tip_slot()?;
 
     let mut blocks = domain
-        .archive()
-        .iter_blocks_with_metadata(&label)
+        .inner
+        .blocks_by_metadata(label, 0, end_slot)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let mut builder =

@@ -5,7 +5,9 @@ use axum::{
 };
 use blockfrost_openapi::models::block_content::BlockContent;
 use dolos_cardano::ChainSummary;
-use dolos_core::{ArchiveStore as _, BlockBody, Domain};
+use dolos_core::{
+    archive::Skippable as _, ArchiveStore as _, BlockBody, Domain, QueryHelpers as _,
+};
 use itertools::Either;
 use pallas::ledger::{
     configs::{byron, shelley},
@@ -88,8 +90,8 @@ fn load_block_by_hash_or_number<D: Domain>(
 ) -> Result<BlockBody, Error> {
     match hash_or_number {
         Either::Left(hash) => Ok(domain
-            .archive()
-            .get_block_by_hash(hash)
+            .inner
+            .block_by_hash(hash)
             .map_err(|_| Error::InvalidBlockHash)?
             .ok_or(StatusCode::NOT_FOUND)?),
         Either::Right(number) => {
@@ -104,8 +106,8 @@ fn load_block_by_hash_or_number<D: Domain>(
             }
 
             Ok(domain
-                .archive()
-                .get_block_by_number(number)
+                .inner
+                .block_by_number(*number)
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
                 .ok_or(StatusCode::NOT_FOUND)?)
         }
@@ -124,8 +126,8 @@ fn build_block_model<D: Domain>(
 
     let maybe_previous = if let Some(prev_hash) = previous_hash {
         domain
-            .archive()
-            .get_block_by_hash(prev_hash.as_ref())
+            .inner
+            .block_by_hash(prev_hash.as_ref())
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     } else {
         None
@@ -136,8 +138,8 @@ fn build_block_model<D: Domain>(
     }
 
     let maybe_next = domain
-        .archive()
-        .get_block_by_number(&builder.next_number())
+        .inner
+        .block_by_number(builder.next_number())
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     if let Some(next) = maybe_next.as_ref() {
@@ -189,12 +191,13 @@ pub async fn by_hash_or_number_previous<D: Domain>(
 
     let curr = MultiEraBlock::decode(&curr).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let iter = domain
+    let mut iter = domain
         .archive()
         .get_range(None, Some(curr.slot()))
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
-        .rev()
-        .enumerate();
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+
+    // Skip past pages we don't need using key-only traversal (no block data read).
+    iter.skip_backward(pagination.from());
 
     let (_, tip) = domain
         .archive()
@@ -206,13 +209,9 @@ pub async fn by_hash_or_number_previous<D: Domain>(
 
     let mut output = vec![];
 
-    for (i, (_, body)) in iter {
-        if pagination.includes(i) {
-            let model = build_block_model(&domain, &body, &tip, &chain)?;
-            output.push(model);
-        } else if i > pagination.to() {
-            break;
-        }
+    for (_, body) in iter.rev().take(pagination.count) {
+        let model = build_block_model(&domain, &body, &tip, &chain)?;
+        output.push(model);
     }
 
     // Insert block 0 only in preview
@@ -254,8 +253,11 @@ pub async fn by_hash_or_number_next<D: Domain>(
         .get_range(Some(curr.slot()), None)
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
 
-    // Discard first block.
-    let _ = iterator.next();
+    // Discard first block (the reference block itself).
+    iterator.skip_forward(1);
+
+    // Skip past pages we don't need using key-only traversal (no block data read).
+    iterator.skip_forward(pagination.from());
 
     let (_, tip) = domain
         .archive()
@@ -267,13 +269,9 @@ pub async fn by_hash_or_number_next<D: Domain>(
 
     let mut output = vec![];
 
-    for (i, (_, body)) in iterator.enumerate() {
-        if pagination.includes(i) {
-            let model = build_block_model(&domain, &body, &tip, &chain)?;
-            output.push(model);
-        } else if i > pagination.to() {
-            break;
-        }
+    for (_, body) in iterator.take(pagination.count) {
+        let model = build_block_model(&domain, &body, &tip, &chain)?;
+        output.push(model);
     }
     let output = match pagination.order {
         Order::Asc => output,

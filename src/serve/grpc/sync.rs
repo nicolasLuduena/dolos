@@ -131,12 +131,13 @@ where
         let message = request.into_inner();
 
         let out: Vec<_> = {
-            let store = self.domain.archive();
+            let archive = self.domain.archive();
 
             let lookup = |br: &u5c::sync::BlockRef| -> Result<BlockBody, Status> {
                 if !br.hash.is_empty() {
-                    if let Some(body) = store
-                        .get_block_by_hash(&br.hash)
+                    if let Some(body) = self
+                        .domain
+                        .block_by_hash(&br.hash)
                         .map_err(|_| Status::internal("Failed to query chain service."))?
                     {
                         return Ok(body);
@@ -144,8 +145,9 @@ where
                 }
 
                 if br.height != 0 {
-                    if let Some(body) = store
-                        .get_block_by_number(&br.height)
+                    if let Some(body) = self
+                        .domain
+                        .block_by_number(br.height)
                         .map_err(|_| Status::internal("Failed to query chain service."))?
                     {
                         return Ok(body);
@@ -153,7 +155,7 @@ where
                 }
 
                 if br.slot != 0 {
-                    if let Some(body) = store
+                    if let Some(body) = archive
                         .get_block_by_slot(&br.slot)
                         .map_err(|_| Status::internal("Failed to query chain service."))?
                     {
@@ -276,16 +278,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_dump_history_pagination() {
-        let domain = ToyDomain::new(None, None).await;
+        let domain = ToyDomain::new(None, None);
         let cancel = CancelTokenImpl::default();
 
         let batch = (0..34)
             .map(|i| dolos_testing::blocks::make_conway_block(i).1)
             .collect_vec();
 
-        let _ = dolos_core::facade::import_blocks(&domain, batch)
-            .await
-            .unwrap();
+        use dolos_core::ImportExt;
+        domain.import_blocks(batch).unwrap();
 
         let service = SyncServiceImpl::new(domain, cancel);
 
@@ -327,7 +328,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_dump_history_max_items() {
-        let domain = ToyDomain::new(None, None).await;
+        let domain = ToyDomain::new(None, None);
         let cancel = CancelTokenImpl::default();
 
         let service = SyncServiceImpl::new(domain, cancel);

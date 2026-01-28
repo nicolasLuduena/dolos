@@ -1,6 +1,7 @@
-use dolos_core::batch::WorkDeltas;
 use dolos_core::hacks::Hacks;
 use dolos_core::{BlockSlot, ChainError, Genesis, NsKey};
+
+use super::WorkDeltas;
 use pallas::codec::minicbor;
 use pallas::crypto::hash::Hash;
 use pallas::ledger::primitives::alonzo::{InstantaneousRewardTarget, MoveInstantaneousReward};
@@ -16,7 +17,7 @@ use tracing::debug;
 
 use crate::model::FixedNamespace as _;
 use crate::{model::AccountState, pallas_extras, roll::BlockVisitor};
-use crate::{CardanoLogic, DRepDelegation, PParamsSet, PoolDelegation, PoolHash};
+use crate::{DRepDelegation, PParamsSet, PoolDelegation, PoolHash};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrackSeenAddresses {
@@ -463,7 +464,7 @@ pub struct AccountVisitor {
 impl BlockVisitor for AccountVisitor {
     fn visit_root(
         &mut self,
-        _: &mut WorkDeltas<CardanoLogic>,
+        _: &mut WorkDeltas,
         _: &MultiEraBlock,
         genesis: &Genesis,
         pparams: &PParamsSet,
@@ -478,7 +479,7 @@ impl BlockVisitor for AccountVisitor {
 
     fn visit_input(
         &mut self,
-        deltas: &mut WorkDeltas<CardanoLogic>,
+        deltas: &mut WorkDeltas,
         _: &MultiEraBlock,
         _: &MultiEraTx,
         _: &MultiEraInput,
@@ -503,7 +504,7 @@ impl BlockVisitor for AccountVisitor {
 
     fn visit_output(
         &mut self,
-        deltas: &mut WorkDeltas<CardanoLogic>,
+        deltas: &mut WorkDeltas,
         _: &MultiEraBlock,
         _: &MultiEraTx,
         _: u32,
@@ -530,7 +531,7 @@ impl BlockVisitor for AccountVisitor {
 
     fn visit_cert(
         &mut self,
-        deltas: &mut WorkDeltas<CardanoLogic>,
+        deltas: &mut WorkDeltas,
         block: &MultiEraBlock,
         _: &MultiEraTx,
         cert: &MultiEraCert,
@@ -587,7 +588,7 @@ impl BlockVisitor for AccountVisitor {
 
     fn visit_withdrawal(
         &mut self,
-        deltas: &mut WorkDeltas<CardanoLogic>,
+        deltas: &mut WorkDeltas,
         _: &MultiEraBlock,
         _: &MultiEraTx,
         account: &[u8],
