@@ -30,7 +30,7 @@ pub mod proposals {
         Unknown,
     }
 
-    pub fn outcome(hacks: &Hacks, _protocol: u16, proposal: &str) -> ProposalOutcome {
+    pub fn outcome(hacks: &Hacks, protocol: u16, proposal: &str) -> ProposalOutcome {
         let hack = hacks.proposals.iter().find(|p| p.id == proposal);
 
         if let Some(hack) = hack {
@@ -39,7 +39,10 @@ pub mod proposals {
                 ProposalOutcomeHack::Canceled => ProposalOutcome::Canceled(hack.epoch),
             }
         } else {
-            ProposalOutcome::Unknown
+            match protocol {
+                0..=8 => ProposalOutcome::RatifiedCurrentEpoch,
+                _ => ProposalOutcome::Unknown,
+            }
         }
     }
 }
