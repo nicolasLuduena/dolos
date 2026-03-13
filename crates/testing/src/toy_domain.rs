@@ -328,6 +328,10 @@ impl dolos_core::Domain for ToyDomain {
             self.tip_broadcast.send(tip).unwrap();
         }
     }
+
+    fn stability_window(&self) -> dolos_core::BlockSlot {
+        dolos_cardano::mutable_slots(&self.genesis())
+    }
 }
 
 impl pallas::interop::utxorpc::LedgerContext for ToyDomain {

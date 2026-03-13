@@ -18,7 +18,7 @@ use dolos_cardano::{
     model::AssetState,
     ChainSummary,
 };
-use dolos_core::{BlockSlot, Domain, EraCbor, IndexStore as _, StateStore as _};
+use dolos_core::{BlockSlot, Domain, RawData, IndexStore as _, StateStore as _};
 use futures_util::StreamExt;
 use itertools::Itertools;
 use pallas::{
@@ -310,7 +310,7 @@ struct AssetModelBuilder {
     subject: Vec<u8>,
     unit: String,
     asset_state: dolos_cardano::model::AssetState,
-    initial_tx: Option<EraCbor>,
+    initial_tx: Option<RawData>,
     registry_url: Option<String>,
 }
 
@@ -337,7 +337,7 @@ impl AssetModelBuilder {
             let ref_state = domain.read_cardano_entity::<AssetState>(entity_key.as_slice())?;
 
             if let Some(metadata_tx) = ref_state.and_then(|state| state.metadata_tx) {
-                if let Some(EraCbor(era, cbor)) = domain
+                if let Some(RawData(era, cbor)) = domain
                     .query()
                     .tx_cbor(metadata_tx.as_slice().to_vec())
                     .await
@@ -367,7 +367,7 @@ impl AssetModelBuilder {
             }
         }
 
-        if let Some(EraCbor(era, cbor)) = &cip25_tx {
+        if let Some(RawData(era, cbor)) = &cip25_tx {
             let tx = decode_era_tx(*era, cbor)?;
 
             if let Some((_, standard, ref_asset_bytes)) = &cip68_reference {
@@ -620,7 +620,7 @@ where
     }
 
     for input in tx.consumes() {
-        if let Some(EraCbor(era, cbor)) = domain
+        if let Some(RawData(era, cbor)) = domain
             .query()
             .tx_cbor(input.hash().as_slice().to_vec())
             .await

@@ -512,4 +512,8 @@ impl Domain for FaultyToyDomain {
     fn notify_tip(&self, tip: TipEvent) {
         self.inner.notify_tip(tip)
     }
+
+    fn stability_window(&self) -> dolos_core::BlockSlot {
+        self.inner.stability_window()
+    }
 }

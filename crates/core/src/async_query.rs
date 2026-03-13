@@ -6,7 +6,7 @@ use pallas::ledger::traverse::MultiEraBlock;
 
 use crate::{
     archive::ArchiveStore, indexes::IndexStore, ArchiveError, BlockBody, BlockSlot, ChainError,
-    ChainPoint, Domain, DomainError, EraCbor, IndexError, TagDimension, TxOrder,
+    ChainPoint, Domain, DomainError, RawData, IndexError, TagDimension, TxOrder,
 };
 
 #[derive(Debug, Clone)]
@@ -134,7 +134,7 @@ where
         Ok(None)
     }
 
-    pub async fn tx_cbor(&self, tx_hash: Vec<u8>) -> Result<Option<EraCbor>, DomainError> {
+    pub async fn tx_cbor(&self, tx_hash: Vec<u8>) -> Result<Option<RawData>, DomainError> {
         let tx_hash_lookup = tx_hash.clone();
         let Some(raw) = self
             .run_blocking(move |domain| {
@@ -153,7 +153,7 @@ where
         let block = MultiEraBlock::decode(raw.as_slice())
             .map_err(|e| DomainError::ChainError(ChainError::DecodingError(e)))?;
         if let Some(tx) = block.txs().iter().find(|x| x.hash().to_vec() == tx_hash) {
-            return Ok(Some(EraCbor(block.era().into(), tx.encode())));
+            return Ok(Some(RawData(block.era().into(), tx.encode())));
         }
 
         Ok(None)

@@ -1,14 +1,41 @@
 use std::borrow::Cow;
 
 use dolos_core::{
-    ChainError, ChainPoint, Domain, EraCbor, Genesis, MempoolAwareUtxoStore, MempoolTx,
+    ChainError, ChainPoint, Domain, Genesis, MempoolAwareUtxoStore, MempoolTx, RawData,
 };
 
 use pallas::ledger::{
-    primitives::{NetworkId, TransactionInput},
+    primitives::{ExUnits, NetworkId, TransactionInput},
     traverse::{MultiEraInput, MultiEraOutput, MultiEraTx},
 };
+use serde::{Deserialize, Serialize};
 use tracing::debug;
+
+/// A serializable representation of a single script evaluation result.
+/// This mirrors `pallas::ledger::validate::phase2::tx::TxEvalResult` but adds
+/// `Serialize`/`Deserialize` so we can store it as bytes in `MempoolTx`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SerializableEvalResult {
+    pub tag: pallas::ledger::primitives::conway::RedeemerTag,
+    pub index: u32,
+    pub units: ExUnits,
+    pub success: bool,
+    pub logs: Vec<String>,
+}
+
+impl From<pallas::ledger::validate::phase2::tx::TxEvalResult> for SerializableEvalResult {
+    fn from(r: pallas::ledger::validate::phase2::tx::TxEvalResult) -> Self {
+        Self {
+            tag: r.tag,
+            index: r.index,
+            units: r.units,
+            success: r.success,
+            logs: r.logs,
+        }
+    }
+}
+
+pub type SerializableEvalReport = Vec<SerializableEvalResult>;
 
 pub fn validate_tx<D: Domain>(
     cbor: &[u8],
@@ -56,9 +83,9 @@ pub fn validate_tx<D: Domain>(
             Cow::Owned(tx_in),
         ));
 
-        let eracbor = eracbor.as_ref();
+        let rawdata = eracbor.as_ref();
 
-        let output = MultiEraOutput::try_from(eracbor)?;
+        let output = MultiEraOutput::try_from(rawdata)?;
 
         pallas_utxos.insert(input, output);
     }
@@ -71,9 +98,9 @@ pub fn validate_tx<D: Domain>(
         &mut pallas::ledger::validate::utils::CertState::default(),
     )?;
 
-    let report = evaluate_tx::<D>(cbor, utxos)?;
+    let raw_report = evaluate_tx::<D>(cbor, utxos)?;
 
-    for eval in report.iter() {
+    for eval in raw_report.iter() {
         if !eval.success {
             return Err(ChainError::Phase2ValidationRejected(eval.logs.clone()));
         }
@@ -82,14 +109,22 @@ pub fn validate_tx<D: Domain>(
     debug!(
         phase1 = true,
         phase2 = true,
-        redeemer_count = report.len(),
+        redeemer_count = raw_report.len(),
         "tx validated"
     );
 
     let era = u16::from(tx.era());
-    let payload = EraCbor(era, cbor.into());
+    let payload = RawData(era, cbor.into());
 
-    let tx = MempoolTx::new(hash, payload, report);
+    let report: SerializableEvalReport = raw_report
+        .into_iter()
+        .map(SerializableEvalResult::from)
+        .collect();
+
+    let report_bytes = serde_json::to_vec(&report)
+        .map_err(|e| ChainError::Phase2EvaluationError(e.to_string()))?;
+
+    let tx = MempoolTx::new(hash, payload, report_bytes);
 
     Ok(tx)
 }
@@ -120,11 +155,11 @@ pub fn evaluate_tx<D: Domain>(
         .get_utxos(input_refs)?
         .into_iter()
         .map(|(TxoRef(a, b), eracbor)| {
-            let era = eracbor.era().try_into().expect("era out of range");
+            let era = eracbor.version().try_into().expect("era out of range");
 
             (
                 pallas::ledger::validate::utils::TxoRef::from((a, b)),
-                pallas::ledger::validate::utils::EraCbor::from((era, eracbor.cbor().into())),
+                pallas::ledger::validate::utils::EraCbor::from((era, eracbor.bytes().into())),
             )
         })
         .collect();

@@ -1,8 +1,7 @@
 use std::collections::HashSet;
 
 use dolos_cardano::indexes::utxo_dimensions;
-use dolos_core::{Domain, IndexError, MempoolAwareUtxoStore, TxoRef};
-use pallas::ledger::traverse::MultiEraOutput;
+use dolos_core::{Domain, IndexError, MempoolAwareUtxoStore, RawData, TxoRef};
 use tx3_resolver::{Error as Tx3Error, UtxoPattern, UtxoRef, UtxoSet, UtxoStore};
 
 use crate::{
@@ -15,7 +14,7 @@ fn search_state_utxos<D: Domain>(
     store: &MempoolAwareUtxoStore<D>,
 ) -> Result<HashSet<TxoRef>, IndexError> {
     // Dummy filter that always returns true (we want all UTxOs matching the index)
-    let no_filter = |_: &MultiEraOutput<'_>| true;
+    let no_filter = |_: &RawData| true;
 
     let refs = match pattern {
         UtxoPattern::ByAddress(address) => {

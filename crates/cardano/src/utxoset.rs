@@ -168,7 +168,7 @@ pub fn build_custom_utxos_delta(config: &CardanoConfig) -> Result<UtxoSetDelta, 
             .era
             .unwrap_or(pallas::ledger::traverse::Era::Conway.into());
 
-        let eracbor = EraCbor(era, utxo.cbor.clone());
+        let eracbor = dolos_core::RawData(era, utxo.cbor.clone());
 
         delta
             .produced_utxo
@@ -206,7 +206,7 @@ mod tests {
             .map(|key| {
                 (
                     key,
-                    OwnedMultiEraOutput::decode(Arc::new(EraCbor(
+                    OwnedMultiEraOutput::decode(Arc::new(dolos_core::RawData(
                         block.era().into(),
                         valid_utxo.clone(),
                     )))

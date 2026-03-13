@@ -42,9 +42,7 @@ pub async fn route<D: Domain + SubmitExt>(
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         },
         DomainError::MempoolError(x) => match x {
-            MempoolError::TraverseError(_) => StatusCode::BAD_REQUEST,
             MempoolError::InvalidTx(_) => StatusCode::BAD_REQUEST,
-            MempoolError::DecodeError(_) => StatusCode::BAD_REQUEST,
             MempoolError::PlutusNotSupported => StatusCode::BAD_REQUEST,
             MempoolError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
             MempoolError::StateError(_) => StatusCode::INTERNAL_SERVER_ERROR,

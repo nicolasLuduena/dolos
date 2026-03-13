@@ -197,6 +197,10 @@ impl Domain for HarnessDomain {
     fn notify_tip(&self, _tip: TipEvent) {
         // no-op: we don't need tip notifications in the harness
     }
+
+    fn stability_window(&self) -> dolos_core::BlockSlot {
+        dolos_cardano::mutable_slots(&self.genesis())
+    }
 }
 
 // ---------------------------------------------------------------------------

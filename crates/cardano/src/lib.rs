@@ -7,8 +7,8 @@ pub use pallas;
 
 use dolos_core::{
     config::CardanoConfig, BlockSlot, ChainError, ChainPoint, Domain, DomainError, EntityKey,
-    EraCbor, Genesis, MempoolAwareUtxoStore, MempoolTx, MempoolUpdate, RawBlock, StateStore,
-    TipEvent, WorkUnit,
+    Genesis, MempoolAwareUtxoStore, MempoolTx, MempoolUpdate, RawBlock, RawData, StateStore,
+    TipEvent, TxHash, TxoRef, WorkUnit,
 };
 
 use crate::{
@@ -50,6 +50,7 @@ pub mod include;
 pub use eras::*;
 pub use model::*;
 pub use utils::{mutable_slots, network_from_genesis};
+
 
 pub type Block<'a> = MultiEraBlock<'a>;
 
@@ -330,8 +331,8 @@ impl dolos_core::ChainLogic for CardanoLogic {
     }
 
     fn compute_undo(
-        block: &dolos_core::Cbor,
-        inputs: &std::collections::HashMap<dolos_core::TxoRef, Arc<EraCbor>>,
+        block: &dolos_core::Bytes,
+        inputs: &std::collections::HashMap<dolos_core::TxoRef, Arc<RawData>>,
         point: ChainPoint,
     ) -> Result<dolos_core::UndoBlockData, ChainError> {
         let block_arc = Arc::new(block.clone());
@@ -360,7 +361,7 @@ impl dolos_core::ChainLogic for CardanoLogic {
         })
     }
 
-    fn decode_utxo(&self, utxo: Arc<EraCbor>) -> Result<Self::Utxo, ChainError> {
+    fn decode_utxo(&self, utxo: Arc<RawData>) -> Result<Self::Utxo, ChainError> {
         let out = OwnedMultiEraOutput::decode(utxo)?;
 
         Ok(out)
@@ -368,6 +369,34 @@ impl dolos_core::ChainLogic for CardanoLogic {
 
     fn mutable_slots(domain: &impl Domain) -> BlockSlot {
         utils::mutable_slots(&domain.genesis())
+    }
+
+    fn tx_produces(raw: &RawData) -> Vec<(u32, RawData)> {
+        use pallas::ledger::traverse::MultiEraTx;
+        let Ok(tx) = MultiEraTx::try_from(raw) else {
+            return vec![];
+        };
+        tx.produces()
+            .into_iter()
+            .map(|(idx, output)| (idx as u32, RawData::from(output)))
+            .collect()
+    }
+
+    fn tx_consumes(raw: &RawData) -> Vec<TxoRef> {
+        use pallas::ledger::traverse::MultiEraTx;
+        let Ok(tx) = MultiEraTx::try_from(raw) else {
+            return vec![];
+        };
+        tx.consumes()
+            .into_iter()
+            .map(|input| TxoRef(*input.hash(), input.index() as u32))
+            .collect()
+    }
+
+    fn tx_hash(raw: &RawData) -> Option<TxHash> {
+        use pallas::ledger::traverse::MultiEraTx;
+        let tx = MultiEraTx::try_from(raw).ok()?;
+        Some(tx.hash())
     }
 
     fn validate_tx<D: Domain>(

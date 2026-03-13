@@ -4,7 +4,9 @@ use pallas::ledger::primitives::Epoch;
 use serde::{Deserialize, Serialize};
 use serde_with::{serde_as, DisplayFromStr};
 
-use crate::{Cbor, Era, TxoRef};
+use crate::{Bytes, ProtocolVersion, TxoRef};
+type Cbor = Bytes;
+type Era = ProtocolVersion;
 
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]

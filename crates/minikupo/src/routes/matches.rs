@@ -5,7 +5,7 @@ use axum::{
     Json,
 };
 use dolos_cardano::{indexes::CardanoIndexExt, network_from_genesis, pallas_extras};
-use dolos_core::{Domain, EraCbor, IndexStore as _, StateStore as _, TxoRef, UtxoSet};
+use dolos_core::{Domain, RawData, IndexStore as _, StateStore as _, TxoRef, UtxoSet};
 use pallas::codec::minicbor;
 use pallas::ledger::{
     addresses::{Address, StakeAddress},
@@ -356,7 +356,7 @@ async fn refs_for_output_ref_pattern<D: Domain>(
             refs
         }
         patterns::OutputIndexPattern::Any => {
-            let Some(EraCbor(era, cbor)) = facade
+            let Some(RawData(era, cbor)) = facade
                 .query()
                 .tx_cbor(tx_id.to_vec())
                 .await
@@ -436,7 +436,7 @@ async fn build_matches<D: Domain>(
     let mut out = Vec::new();
 
     for (txo_ref, cbor) in utxos {
-        let cbor: &dolos_core::EraCbor = cbor.as_ref();
+        let cbor: &dolos_core::RawData = cbor.as_ref();
         let output = MultiEraOutput::try_from(cbor).map_err(|_| MatchError::Internal)?;
         let address = output.address().map_err(|_| MatchError::Internal)?;
 

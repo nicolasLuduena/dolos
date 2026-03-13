@@ -9,7 +9,7 @@ use tracing::{debug, info, warn};
 
 use dolos_core::{
     config::RedbArchiveConfig, ArchiveError, BlockBody, BlockSlot, ChainPoint, EntityValue,
-    EraCbor, LogKey, Namespace, RawBlock, StateSchema, TxHash, TxOrder, TxoRef,
+    RawData, LogKey, Namespace, RawBlock, StateSchema, TxHash, TxOrder, TxoRef,
 };
 
 use ::redb::Durability;
@@ -635,7 +635,7 @@ impl ArchiveStore {
         Ok(None)
     }
 
-    pub fn get_tx(&self, tx_hash: &[u8]) -> Result<Option<EraCbor>, RedbArchiveError> {
+    pub fn get_tx(&self, tx_hash: &[u8]) -> Result<Option<RawData>, RedbArchiveError> {
         let rx = self.db().begin_read()?;
         let Some(slot) = indexes::Indexes::get_by_tx_hash(&rx, tx_hash)? else {
             return Ok(None);
@@ -648,7 +648,7 @@ impl ArchiveStore {
         let block =
             MultiEraBlock::decode(raw.as_slice()).map_err(ArchiveError::BlockDecodingError)?;
         if let Some(tx) = block.txs().iter().find(|x| x.hash().to_vec() == tx_hash) {
-            return Ok(Some(EraCbor(block.era().into(), tx.encode())));
+            return Ok(Some(RawData(block.era().into(), tx.encode())));
         }
 
         Ok(None)

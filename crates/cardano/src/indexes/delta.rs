@@ -4,7 +4,7 @@
 //! structures from Cardano block data.
 
 use dolos_core::{
-    ArchiveIndexDelta, BlockSlot, ChainPoint, EraCbor, IndexDelta, Tag, TxoRef, UtxoIndexDelta,
+    ArchiveIndexDelta, BlockSlot, ChainPoint, RawData, IndexDelta, Tag, TxoRef, UtxoIndexDelta,
     UtxoSetDelta,
 };
 use pallas::{
@@ -286,8 +286,8 @@ impl CardanoIndexDeltaBuilder {
         }
     }
 
-    /// Extract UTxO filter tags from raw EraCbor.
-    fn extract_tags_from_era_cbor(era_cbor: &EraCbor) -> Option<Vec<Tag>> {
+    /// Extract UTxO filter tags from raw RawData.
+    fn extract_tags_from_era_cbor(era_cbor: &RawData) -> Option<Vec<Tag>> {
         let output = MultiEraOutput::try_from(era_cbor).ok()?;
         Some(Self::extract_utxo_tags(&output))
     }

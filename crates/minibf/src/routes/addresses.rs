@@ -22,7 +22,7 @@ use dolos_cardano::{
     indexes::{AsyncCardanoQueryExt, CardanoIndexExt, SlotOrder},
     pallas_extras, ChainSummary,
 };
-use dolos_core::{BlockBody, BlockSlot, Domain, EraCbor, StateStore as _, TxoRef};
+use dolos_core::{BlockBody, BlockSlot, Domain, RawData, StateStore as _, TxoRef};
 
 use crate::{
     error::Error,
@@ -397,7 +397,7 @@ where
     }
 
     for input in tx.consumes() {
-        if let Some(EraCbor(era, cbor)) = domain
+        if let Some(RawData(era, cbor)) = domain
             .query()
             .tx_cbor(input.hash().as_slice().to_vec())
             .await

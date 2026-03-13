@@ -9,7 +9,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use tracing::{debug, warn};
 
 use dolos_core::{
-    config::RedbMempoolConfig, ChainPoint, EraCbor, MempoolError, MempoolEvent, MempoolPage,
+    config::RedbMempoolConfig, ChainPoint, RawData, MempoolError, MempoolEvent, MempoolPage,
     MempoolStore, MempoolTx, MempoolTxStage, TxHash, TxStatus,
 };
 
@@ -184,9 +184,9 @@ impl redb::Key for DbTxHash {
     }
 }
 
-/// Newtype wrapping `EraCbor` for the pending table value (foreign type).
+/// Newtype wrapping `RawData` for the pending table value (foreign type).
 #[derive(Debug)]
-struct DbEraCbor(EraCbor);
+struct DbEraCbor(RawData);
 
 impl redb::Value for DbEraCbor {
     type SelfType<'a>
@@ -240,7 +240,7 @@ struct InflightRecord {
     #[n(1)]
     confirmations: u32,
     #[n(2)]
-    payload: EraCbor,
+    payload: RawData,
     #[cbor(n(3), with = "minicbor::bytes")]
     confirmed_at: Option<Vec<u8>>,
     #[n(4)]
@@ -290,7 +290,7 @@ struct FinalizedEntry {
     #[cbor(n(2), with = "minicbor::bytes")]
     confirmed_at: Option<Vec<u8>>,
     #[n(3)]
-    payload: Option<EraCbor>,
+    payload: Option<RawData>,
     #[n(4)]
     dropped: Option<bool>,
 }
@@ -339,7 +339,7 @@ impl FinalizedEntry {
         };
         MempoolTx {
             hash: TxHash::from(hash_bytes),
-            payload: self.payload.unwrap_or(EraCbor(0, vec![])),
+            payload: self.payload.unwrap_or(RawData(0, vec![])),
             stage,
             confirmations: self.confirmations,
             non_confirmations: 0,
@@ -352,7 +352,7 @@ impl FinalizedEntry {
 }
 
 impl InflightRecord {
-    fn new(payload: EraCbor) -> Self {
+    fn new(payload: RawData) -> Self {
         Self {
             stage: InflightStage::Propagated,
             confirmations: 0,
@@ -520,7 +520,7 @@ impl PendingTable {
     fn insert(
         wx: &redb::WriteTransaction,
         hash: &TxHash,
-        payload: &EraCbor,
+        payload: &RawData,
     ) -> Result<(), RedbMempoolError> {
         let mut table = wx.open_table(Self::DEF)?;
         let seq = match table.last()? {
@@ -535,7 +535,7 @@ impl PendingTable {
     fn drain_by_hashes(
         wx: &redb::WriteTransaction,
         hashes: &HashSet<TxHash>,
-    ) -> Result<Vec<(TxHash, EraCbor)>, RedbMempoolError> {
+    ) -> Result<Vec<(TxHash, RawData)>, RedbMempoolError> {
         let mut table = wx.open_table(Self::DEF)?;
         let extracted = table.extract_if(|key, _value| hashes.contains(&key.hash()))?;
         extracted
@@ -1205,7 +1205,7 @@ mod tests {
             assert_eq!(entry.confirmations, 2);
             assert!(entry.confirmed_at.is_some());
             assert!(
-                !entry.payload.1.is_empty(),
+                !entry.payload.bytes().is_empty(),
                 "finalized entry should include payload"
             );
         }

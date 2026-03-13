@@ -15,7 +15,7 @@
 //! - **UTxOs**: `txhash[32] ++ idx[4]` (36 bytes) -> `era[2] ++ cbor[...]`
 //! - **Entities**: `[ns_hash:8][key:32]` (40 bytes) -> value bytes
 
-use dolos_core::{Era, TxoRef};
+use dolos_core::{ProtocolVersion, TxoRef};
 use std::hash::Hasher;
 use xxhash_rust::xxh3::{xxh3_64, Xxh3};
 
@@ -165,15 +165,15 @@ pub const ERA_SIZE: usize = 2;
 pub const REFCOUNT_SIZE: usize = 8;
 
 /// Encode a UTxO value: era (2 bytes BE) + cbor
-pub fn encode_utxo_value(era: Era, cbor: &[u8]) -> Vec<u8> {
+pub fn encode_utxo_value(era: ProtocolVersion, cbor: &[u8]) -> Vec<u8> {
     let mut value = Vec::with_capacity(ERA_SIZE + cbor.len());
     value.extend_from_slice(&era.to_be_bytes());
     value.extend_from_slice(cbor);
     value
 }
 
-/// Decode a UTxO value into (era, cbor)
-pub fn decode_utxo_value(bytes: &[u8]) -> Option<(Era, Vec<u8>)> {
+/// Decode a UTxO value into (version, cbor)
+pub fn decode_utxo_value(bytes: &[u8]) -> Option<(ProtocolVersion, Vec<u8>)> {
     if bytes.len() < ERA_SIZE {
         return None;
     }
@@ -257,7 +257,7 @@ mod tests {
 
     #[test]
     fn test_utxo_value_roundtrip() {
-        let era: Era = 6;
+        let era: ProtocolVersion = 6;
         let cbor = vec![0x82, 0x00, 0x01, 0x02, 0x03];
         let encoded = encode_utxo_value(era, &cbor);
         let (decoded_era, decoded_cbor) = decode_utxo_value(&encoded).unwrap();
@@ -277,7 +277,7 @@ mod tests {
 
     #[test]
     fn test_empty_cbor_utxo_value() {
-        let era: Era = 1;
+        let era: ProtocolVersion = 1;
         let cbor: Vec<u8> = vec![];
         let encoded = encode_utxo_value(era, &cbor);
         assert_eq!(encoded.len(), ERA_SIZE);

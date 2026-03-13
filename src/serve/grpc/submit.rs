@@ -63,35 +63,44 @@ fn event_to_wait_for_tx_response(event: MempoolEvent) -> WaitForTxResponse {
 }
 
 fn tx_eval_to_u5c(eval: Result<MempoolTx, DomainError>) -> u5c::spec::cardano::TxEval {
+    use dolos_cardano::validate::SerializableEvalReport;
+
     match eval {
-        Ok(tx) => u5c::spec::cardano::TxEval {
-            ex_units: tx.report.iter().flatten().try_fold(
-                u5c::spec::cardano::ExUnits::default(),
-                |acc, eval| {
-                    Some(ExUnits {
-                        steps: acc.steps + eval.units.steps,
-                        memory: acc.memory + eval.units.mem,
-                    })
-                },
-            ),
-            redeemers: tx
+        Ok(tx) => {
+            // Deserialize the serialized EvalReport bytes back to SerializableEvalReport.
+            let report: Option<SerializableEvalReport> = tx
                 .report
-                .iter()
-                .flatten()
-                .map(|x| u5c::spec::cardano::Redeemer {
-                    purpose: x.tag as i32,
-                    index: x.index,
-                    ex_units: Some(u5c::spec::cardano::ExUnits {
-                        steps: x.units.steps,
-                        memory: x.units.mem,
-                    }),
-                    ..Default::default()
-                })
-                .collect(),
-            fee: None,      // TODO
-            traces: vec![], // TODO
-            ..Default::default()
-        },
+                .as_deref()
+                .and_then(|bytes| serde_json::from_slice(bytes).ok());
+
+            u5c::spec::cardano::TxEval {
+                ex_units: report.iter().flatten().try_fold(
+                    u5c::spec::cardano::ExUnits::default(),
+                    |acc, eval| {
+                        Some(ExUnits {
+                            steps: acc.steps + eval.units.steps,
+                            memory: acc.memory + eval.units.mem,
+                        })
+                    },
+                ),
+                redeemers: report
+                    .iter()
+                    .flatten()
+                    .map(|x| u5c::spec::cardano::Redeemer {
+                        purpose: x.tag as i32,
+                        index: x.index,
+                        ex_units: Some(u5c::spec::cardano::ExUnits {
+                            steps: x.units.steps,
+                            memory: x.units.mem,
+                        }),
+                        ..Default::default()
+                    })
+                    .collect(),
+                fee: None,      // TODO
+                traces: vec![], // TODO
+                ..Default::default()
+            }
+        }
         Err(e) => u5c::spec::cardano::TxEval {
             errors: vec![u5c::spec::cardano::EvalError {
                 msg: format!("{e:#?}"),

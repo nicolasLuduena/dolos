@@ -80,8 +80,8 @@ impl DomainAdapter {
         for (_, log) in iter.rev() {
             for (txo_ref, era_cbor) in &log.inputs {
                 if refs_set.contains(txo_ref) {
-                    let era = era_cbor.0.try_into().expect("era out of range");
-                    result.insert(txo_ref.clone().into(), (era, era_cbor.1.clone()));
+                    let era = era_cbor.version().try_into().expect("era out of range");
+                    result.insert(txo_ref.clone().into(), (era, era_cbor.bytes().to_vec()));
                 }
             }
 
@@ -173,6 +173,10 @@ impl Domain for DomainAdapter {
             self.tip_broadcast.send(tip).unwrap();
         }
     }
+
+    fn stability_window(&self) -> BlockSlot {
+        dolos_cardano::mutable_slots(&self.genesis())
+    }
 }
 
 impl pallas::interop::utxorpc::LedgerContext for DomainAdapter {
@@ -186,8 +190,8 @@ impl pallas::interop::utxorpc::LedgerContext for DomainAdapter {
             .ok()?
             .into_iter()
             .map(|(k, v)| {
-                let era = v.0.try_into().expect("era out of range");
-                (k.into(), (era, v.1.clone()))
+                let era = v.version().try_into().expect("era out of range");
+                (k.into(), (era, v.bytes().to_vec()))
             })
             .collect();
 

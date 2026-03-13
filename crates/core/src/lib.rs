@@ -49,7 +49,7 @@ pub use submit::SubmitExt;
 pub use sync::SyncExt;
 pub use work_unit::{MempoolUpdate, WorkUnit};
 
-pub type Era = u16;
+pub type ProtocolVersion = u16;
 
 /// The index of an output in a tx
 pub type TxoIdx = u32;
@@ -63,14 +63,15 @@ pub type BlockSlot = u64;
 /// The height of a block (a.k.a. block number)
 pub type BlockHeight = u64;
 
-pub type Cbor = Vec<u8>;
-pub type BlockBody = Cbor;
+pub type Bytes = Vec<u8>;
+pub type Cbor = Bytes;
+pub type BlockBody = Bytes;
 pub type RawBlock = Arc<BlockBody>;
 pub type RawBlockBatch = Vec<RawBlock>;
-pub type RawUtxoMap = HashMap<TxoRef, Arc<EraCbor>>;
+pub type RawUtxoMap = HashMap<TxoRef, Arc<RawData>>;
 pub type BlockEra = pallas::ledger::traverse::Era;
 pub type BlockHash = Hash<32>;
-pub type BlockHeader = Cbor;
+pub type BlockHeader = Bytes;
 pub type TxHash = Hash<32>;
 
 /// Data needed to undo a block during rollback.
@@ -83,7 +84,7 @@ pub struct UndoBlockData {
     pub tx_hashes: Vec<TxHash>,
 }
 pub type OutputIdx = u64;
-pub type UtxoBody = (u16, Cbor);
+pub type UtxoBody = (u16, Bytes);
 pub type ChainTip = pallas::network::miniprotocols::chainsync::Tip;
 pub type LogSeq = u64;
 
@@ -96,13 +97,25 @@ pub use state::*;
 pub use wal::*;
 
 #[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize, Encode, Decode)]
-pub struct EraCbor(
-    #[n(0)] pub Era,
-    #[cbor(n(1), with = "minicbor::bytes")] pub Cbor,
+pub struct RawData(
+    #[n(0)] pub ProtocolVersion,
+    #[cbor(n(1), with = "minicbor::bytes")] pub Bytes,
 );
 
-impl EraCbor {
-    pub fn era(&self) -> Era {
+/// Backwards-compatible type alias.
+pub type EraCbor = RawData;
+
+impl RawData {
+    pub fn version(&self) -> ProtocolVersion {
+        self.0
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.1
+    }
+
+    // Legacy method aliases kept for compatibility.
+    pub fn era(&self) -> ProtocolVersion {
         self.0
     }
 
@@ -111,52 +124,52 @@ impl EraCbor {
     }
 }
 
-impl AsRef<[u8]> for EraCbor {
+impl AsRef<[u8]> for RawData {
     fn as_ref(&self) -> &[u8] {
         &self.1
     }
 }
 
-impl From<(Era, Cbor)> for EraCbor {
-    fn from(value: (Era, Cbor)) -> Self {
+impl From<(ProtocolVersion, Bytes)> for RawData {
+    fn from(value: (ProtocolVersion, Bytes)) -> Self {
         Self(value.0, value.1)
     }
 }
 
-impl From<EraCbor> for (Era, Cbor) {
-    fn from(value: EraCbor) -> Self {
+impl From<RawData> for (ProtocolVersion, Bytes) {
+    fn from(value: RawData) -> Self {
         (value.0, value.1)
     }
 }
 
-impl From<MultiEraOutput<'_>> for EraCbor {
+impl From<MultiEraOutput<'_>> for RawData {
     fn from(value: MultiEraOutput<'_>) -> Self {
-        EraCbor(value.era().into(), value.encode())
+        RawData(value.era().into(), value.encode())
     }
 }
 
-impl<'a> TryFrom<&'a EraCbor> for MultiEraOutput<'a> {
+impl<'a> TryFrom<&'a RawData> for MultiEraOutput<'a> {
     type Error = pallas::codec::minicbor::decode::Error;
 
-    fn try_from(value: &'a EraCbor) -> Result<Self, Self::Error> {
+    fn try_from(value: &'a RawData) -> Result<Self, Self::Error> {
         let era = value.0.try_into().expect("era out of range");
         MultiEraOutput::decode(era, &value.1)
     }
 }
 
-impl<'a> TryFrom<&'a EraCbor> for MultiEraTx<'a> {
+impl<'a> TryFrom<&'a RawData> for MultiEraTx<'a> {
     type Error = pallas::codec::minicbor::decode::Error;
 
-    fn try_from(value: &'a EraCbor) -> Result<Self, Self::Error> {
+    fn try_from(value: &'a RawData) -> Result<Self, Self::Error> {
         let era = value.0.try_into().expect("era out of range");
         MultiEraTx::decode_for_era(era, &value.1)
     }
 }
 
-impl TryFrom<EraCbor> for MultiEraUpdate<'_> {
+impl TryFrom<RawData> for MultiEraUpdate<'_> {
     type Error = pallas::codec::minicbor::decode::Error;
 
-    fn try_from(value: EraCbor) -> Result<Self, Self::Error> {
+    fn try_from(value: RawData) -> Result<Self, Self::Error> {
         let era = value.0.try_into().expect("era out of range");
         MultiEraUpdate::decode_for_era(era, &value.1)
     }
@@ -242,16 +255,16 @@ pub enum BrokenInvariant {
     EpochBoundaryIncomplete,
 }
 
-pub type UtxoMap = HashMap<TxoRef, Arc<EraCbor>>;
+pub type UtxoMap = HashMap<TxoRef, Arc<RawData>>;
 
 pub type UtxoSet = HashSet<TxoRef>;
 
 #[derive(Default, Debug, Clone)]
 pub struct UtxoSetDelta {
-    pub produced_utxo: HashMap<TxoRef, Arc<EraCbor>>,
-    pub consumed_utxo: HashMap<TxoRef, Arc<EraCbor>>,
-    pub recovered_stxi: HashMap<TxoRef, Arc<EraCbor>>,
-    pub undone_utxo: HashMap<TxoRef, Arc<EraCbor>>,
+    pub produced_utxo: HashMap<TxoRef, Arc<RawData>>,
+    pub consumed_utxo: HashMap<TxoRef, Arc<RawData>>,
+    pub recovered_stxi: HashMap<TxoRef, Arc<RawData>>,
+    pub undone_utxo: HashMap<TxoRef, Arc<RawData>>,
 }
 
 #[derive(Debug, Clone)]
@@ -265,9 +278,9 @@ pub struct LogValue<D>
 where
     D: EntityDelta,
 {
-    pub block: Cbor,
+    pub block: Bytes,
     pub delta: Vec<D>,
-    pub inputs: HashMap<TxoRef, Arc<EraCbor>>,
+    pub inputs: HashMap<TxoRef, Arc<RawData>>,
 }
 
 impl<D> LogValue<D>
@@ -499,13 +512,13 @@ pub trait ChainLogic: Sized + Send + Sync {
     /// returns the UTxO delta, index delta, and transaction hashes needed
     /// to reverse the block's effects.
     fn compute_undo(
-        block: &Cbor,
-        inputs: &HashMap<TxoRef, Arc<EraCbor>>,
+        block: &Bytes,
+        inputs: &HashMap<TxoRef, Arc<RawData>>,
         point: ChainPoint,
     ) -> Result<UndoBlockData, ChainError>;
 
     // TODO: remove from the interface - this is Cardano-specific
-    fn decode_utxo(&self, utxo: Arc<EraCbor>) -> Result<Self::Utxo, ChainError>;
+    fn decode_utxo(&self, utxo: Arc<RawData>) -> Result<Self::Utxo, ChainError>;
 
     // TODO: remove from the interface - this is Cardano-specific
     fn mutable_slots(domain: &impl Domain) -> BlockSlot;
@@ -514,6 +527,17 @@ pub trait ChainLogic: Sized + Send + Sync {
     fn last_immutable_slot(domain: &impl Domain, tip: BlockSlot) -> BlockSlot {
         tip.saturating_sub(Self::mutable_slots(domain))
     }
+
+    /// Extract outputs produced by a transaction.
+    ///
+    /// Returns a list of `(output_index, raw_output_data)` pairs.
+    fn tx_produces(raw: &RawData) -> Vec<(u32, RawData)>;
+
+    /// Extract inputs consumed by a transaction.
+    fn tx_consumes(raw: &RawData) -> Vec<TxoRef>;
+
+    /// Compute the hash of a transaction from its raw bytes.
+    fn tx_hash(raw: &RawData) -> Option<TxHash>;
 
     /// Validate a transaction against the current ledger state.
     fn validate_tx<D: Domain>(
@@ -608,6 +632,9 @@ pub trait Domain: Send + Sync + Clone + 'static {
     fn watch_tip(&self, from: Option<ChainPoint>) -> Result<Self::TipSubscription, DomainError>;
     fn notify_tip(&self, tip: TipEvent);
 
+    /// Returns the number of slots in the stability window (mutable zone).
+    fn stability_window(&self) -> BlockSlot;
+
     const MAX_PRUNE_SLOTS_PER_HOUSEKEEPING: u64 = 10_000;
 
     fn housekeeping(&self) -> Result<bool, DomainError> {
@@ -615,7 +642,7 @@ pub trait Domain: Send + Sync + Clone + 'static {
             .storage_config()
             .state
             .max_history()
-            .unwrap_or(Self::Chain::mutable_slots(self));
+            .unwrap_or(self.stability_window());
 
         info!(max_ledger_slots, "pruning ledger for excess history");
 
