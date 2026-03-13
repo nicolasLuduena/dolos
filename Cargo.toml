@@ -171,6 +171,7 @@ members = [
     "crates/cardano",
     "crates/core",
     "crates/fjall",
+    "crates/midnight",
     "crates/testing",
     "crates/minibf",
     "crates/redb3",

@@ -1330,6 +1330,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dolos-midnight"
+version = "1.0.0-rc.12"
+dependencies = [
+ "dolos-core",
+ "serde",
+ "thiserror 2.0.12",
+ "tracing",
+]
+
+[[package]]
 name = "dolos-minibf"
 version = "1.0.0-rc.12"
 dependencies = [

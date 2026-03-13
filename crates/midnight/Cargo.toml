@@ -1,0 +1,10 @@
+[package]
+name = "dolos-midnight"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+dolos-core = { path = "../core" }
+thiserror.workspace = true
+tracing.workspace = true
+serde.workspace = true
