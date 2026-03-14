@@ -24,6 +24,9 @@ mod minibf;
 #[cfg(feature = "minikupo")]
 mod minikupo;
 
+#[cfg(feature = "midnight")]
+mod midnight_sync;
+
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Initialize the node configuration
@@ -60,6 +63,10 @@ enum Command {
     /// runs a minikupo query in-process
     #[cfg(feature = "minikupo")]
     Minikupo(minikupo::Args),
+
+    /// Sync blocks from a Midnight node via Substrate JSON-RPC
+    #[cfg(feature = "midnight")]
+    MidnightSync(midnight_sync::Args),
 }
 
 #[derive(Debug, Parser)]
@@ -107,6 +114,10 @@ fn main() -> Result<()> {
 
         #[cfg(feature = "minikupo")]
         (Ok(config), Command::Minikupo(x)) => minikupo::run(&config, &x),
+
+        // midnight-sync uses its own config, independent of RootConfig.
+        #[cfg(feature = "midnight")]
+        (_, Command::MidnightSync(args)) => midnight_sync::run(&args),
 
         (Err(x), _) => Err(x),
     }

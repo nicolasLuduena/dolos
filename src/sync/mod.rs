@@ -11,6 +11,32 @@ pub mod emulator;
 pub mod pull;
 pub mod submit;
 
+#[cfg(feature = "midnight")]
+pub mod midnight_apply;
+#[cfg(feature = "midnight")]
+pub mod midnight_pull;
+
+#[cfg(feature = "midnight")]
+pub fn midnight_sync(
+    rpc_url: String,
+    domain: crate::adapters::midnight::MidnightDomainAdapter,
+    retries: &Option<dolos_core::config::RetryConfig>,
+) -> Result<Vec<gasket::runtime::Tether>, Error> {
+    let mut pull = midnight_pull::Stage::new(rpc_url);
+    let mut apply = midnight_apply::Stage::new(domain, HOUSEKEEPING_INTERVAL);
+
+    let (to_apply, from_pull) = gasket::messaging::tokio::mpsc_channel(50);
+    pull.downstream.connect(to_apply);
+    apply.upstream.connect(from_pull);
+
+    let policy = define_gasket_policy(retries);
+
+    let pull = gasket::runtime::spawn_stage(pull, policy.clone());
+    let apply = gasket::runtime::spawn_stage(apply, policy);
+
+    Ok(vec![pull, apply])
+}
+
 const HOUSEKEEPING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
 
 fn define_gasket_policy(config: &Option<RetryConfig>) -> gasket::runtime::Policy {

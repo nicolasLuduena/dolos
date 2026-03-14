@@ -1,5 +1,8 @@
 pub mod storage;
 
+#[cfg(feature = "midnight")]
+pub mod midnight;
+
 use std::sync::Arc;
 
 use dolos_cardano::CardanoLogic;

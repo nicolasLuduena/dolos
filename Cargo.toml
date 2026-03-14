@@ -42,6 +42,7 @@ tracing-opentelemetry.workspace = true
 
 dolos-core = { path = "crates/core" }
 dolos-cardano = { path = "crates/cardano", features = ["include-genesis"] }
+dolos-midnight = { path = "crates/midnight", optional = true }
 dolos-redb3 = { path = "crates/redb3" }
 dolos-fjall = { path = "crates/fjall" }
 dolos-minibf = { path = "crates/minibf", optional = true }
@@ -157,6 +158,7 @@ minikupo = [
     "tower-http/normalize-path",
 ]
 trp = ["dolos-trp"]
+midnight = ["dolos-midnight"]
 
 # Default features - includes all services
 default = ["mithril", "utils", "grpc", "minibf", "minikupo", "trp"]

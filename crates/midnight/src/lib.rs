@@ -29,12 +29,16 @@
 #![allow(dead_code)]
 
 use dolos_core::{
-    Block, BlockHash, BlockSlot, Bytes, ChainError, ChainLogic, ChainPoint, Domain, Entity,
-    EntityDelta, EntityKey, EntityValue, Genesis, MempoolAwareUtxoStore, MempoolTx, Namespace,
-    NsKey, RawBlock, RawData, RawUtxoMap, StateSchema, TxHash, TxoRef, UndoBlockData, WorkUnit,
-    DomainError, TipEvent,
+    archive::{ArchiveStore, ArchiveWriter},
+    state::{StateStore, StateWriter},
+    Block, BlockHash, BlockSlot, Bytes, ChainError, ChainLogic, ChainPoint, Domain, DomainError,
+    Entity, EntityDelta, EntityKey, EntityValue, Genesis, MempoolAwareUtxoStore, MempoolTx,
+    Namespace, NsKey, RawBlock, RawData, RawUtxoMap, StateSchema, TipEvent, TxHash, TxoRef,
+    UndoBlockData, WorkUnit,
 };
+use parity_scale_codec::{Decode, Encode};
 use serde::{Deserialize, Serialize};
+use sp_runtime::{generic, traits::BlakeTwo256};
 use std::{collections::HashMap, sync::Arc};
 
 // ---------------------------------------------------------------------------
@@ -59,22 +63,19 @@ pub struct MidnightConfig {
 // Block
 // ---------------------------------------------------------------------------
 
+/// Midnight uses u32 block numbers (matches the Midnight node runtime).
+pub type BlockNumber = u32;
+pub type BlockHeader = generic::Header<BlockNumber, BlakeTwo256>;
+
+/// Opaque block type — matches `midnight_node_runtime::opaque::Block`.
+pub type OpaqueBlock = generic::Block<BlockHeader, sp_runtime::OpaqueExtrinsic>;
+
 /// A decoded Midnight block, ready for ledger processing.
-///
-/// TODO: replace the raw-bytes fields with a proper in-memory Midnight block
-/// representation once a Midnight codec library is available (analogous to
-/// pallas `MultiEraBlock` for Cardano).
 pub struct MidnightBlock {
     /// Raw serialised block bytes (kept for archive storage).
     pub raw: RawBlock,
     /// The slot number carried in the block header.
-    ///
-    /// TODO: extract from the decoded block header.
-    pub slot: BlockSlot,
-    /// The block hash.
-    ///
-    /// TODO: compute using the Midnight block hashing algorithm.
-    pub hash: BlockHash,
+    pub header: BlockHeader,
 }
 
 impl Block for MidnightBlock {
@@ -83,18 +84,18 @@ impl Block for MidnightBlock {
     /// These are loaded from storage before `compute()` runs so that
     /// transaction validation can resolve inputs.
     ///
-    /// TODO: decode the raw block and extract every transaction input as a
     /// `TxoRef(tx_hash, output_index)`.
     fn depends_on(&self, _loaded: &mut RawUtxoMap) -> Vec<TxoRef> {
-        todo!("decode Midnight block and return every consumed TxoRef")
+        // TODO: decode Midnight block and return every consumed TxoRef
+        vec![]
     }
 
     fn slot(&self) -> BlockSlot {
-        self.slot
+        self.header.number.into()
     }
 
     fn hash(&self) -> BlockHash {
-        self.hash
+        self.header.hash().as_bytes().into()
     }
 
     fn raw(&self) -> RawBlock {
@@ -128,21 +129,14 @@ impl MidnightEntity {
 }
 
 impl Entity for MidnightEntity {
-    /// Decode an entity from its raw storage bytes.
-    ///
-    /// TODO: implement using the Midnight-specific encoding.
-    /// Cardano uses minicbor; Midnight may use SCALE or a bespoke codec.
-    fn decode_entity(_ns: Namespace, _value: &EntityValue) -> Result<Self, ChainError> {
-        todo!("decode MidnightEntity from namespace and raw bytes")
+    fn decode_entity(_ns: Namespace, value: &EntityValue) -> Result<Self, ChainError> {
+        Ok(Self::Placeholder(value.clone()))
     }
 
-    /// Encode an entity into its storage bytes.
-    ///
-    /// Returns `(namespace, encoded_bytes)`.
-    ///
-    /// TODO: implement the inverse of `decode_entity`.
-    fn encode_entity(_value: &Self) -> (Namespace, EntityValue) {
-        todo!("encode MidnightEntity to (namespace, raw bytes)")
+    fn encode_entity(value: &Self) -> (Namespace, EntityValue) {
+        match value {
+            Self::Placeholder(data) => (Self::NS_PLACEHOLDER, data.clone()),
+        }
     }
 }
 
@@ -161,12 +155,15 @@ impl Entity for MidnightEntity {
 ///
 /// Each variant/op needs a working `apply` *and* `undo` implementation —
 /// `undo` must be able to fully reverse `apply` without extra context.
+///
+/// The `ns` field uses `String` (not `&'static str`) so that `MidnightDelta`
+/// satisfies `DeserializeOwned`, which is required by the WAL store backend.
+/// Call sites convert back to `&'static str` via the known namespace constants.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MidnightDelta {
-    /// Namespace of the entity being modified.
-    ///
-    /// TODO: set to the appropriate `MidnightEntity::NS_*` constant.
-    pub ns: &'static str,
+    /// Namespace of the entity being modified (stored as an owned string for
+    /// serde compatibility; currently always `MidnightEntity::NS_PLACEHOLDER`).
+    pub ns: String,
 
     /// Key of the entity being modified within its namespace.
     pub key: EntityKey,
@@ -179,8 +176,11 @@ impl MidnightDelta {
     /// Construct a placeholder delta (useful for scaffolding tests).
     ///
     /// TODO: replace with typed constructors once delta variants are defined.
-    pub fn placeholder(ns: &'static str, key: EntityKey) -> Self {
-        Self { ns, key }
+    pub fn placeholder(key: EntityKey) -> Self {
+        Self {
+            ns: MidnightEntity::NS_PLACEHOLDER.to_string(),
+            key,
+        }
     }
 }
 
@@ -188,28 +188,17 @@ impl EntityDelta for MidnightDelta {
     type Entity = MidnightEntity;
 
     fn key(&self) -> NsKey {
-        NsKey(self.ns, self.key.clone())
+        // Currently only one namespace is defined; all deltas use NS_PLACEHOLDER.
+        // Extend this match once more entity variants are added.
+        NsKey(MidnightEntity::NS_PLACEHOLDER, self.key.clone())
     }
 
-    /// Apply this delta to the entity.
-    ///
-    /// Set `*entity = Some(...)` to upsert; leave it as `None` to delete.
-    ///
-    /// Also capture any state needed by `undo` (e.g. store the previous value).
-    ///
-    /// TODO: implement for every delta variant.
     fn apply(&mut self, _entity: &mut Option<MidnightEntity>) {
-        todo!("apply MidnightDelta to entity (upsert or delete)")
+        // no-op: real delta application to be implemented
     }
 
-    /// Reverse a previously applied delta (called during chain rollback).
-    ///
-    /// Must assume `apply` was already called and restore the entity to its
-    /// pre-apply state.
-    ///
-    /// TODO: implement the inverse of `apply` for every delta variant.
     fn undo(&self, _entity: &mut Option<MidnightEntity>) {
-        todo!("undo MidnightDelta — restore entity to its pre-apply state")
+        // no-op: real rollback to be implemented
     }
 }
 
@@ -239,25 +228,14 @@ pub struct MidnightUtxo {
 ///
 /// TODO: add variants as the Midnight lifecycle is defined.  At minimum you
 /// will need `Genesis` (bootstrap) and `Roll` (normal block application).
-/// Cardano also has `Rupd` (rewards pre-computation), `Ewrap` (epoch wrap-up),
-/// and `Estart` (epoch-start / era-transition) — add Midnight equivalents as
-/// needed.
 pub enum MidnightWorkUnit {
     /// Bootstrap the ledger from the Midnight genesis configuration.
-    ///
-    /// TODO: implement genesis block / initial-UTxO bootstrapping.
     Genesis,
 
     /// Process a block (or batch of blocks) from the chain.
-    ///
-    /// TODO: implement UTxO-set update, entity-delta computation, index
-    /// updates, and WAL logging for normal block application.
     Roll {
         /// Raw block bytes queued by [`MidnightLogic::receive_block`].
-        ///
-        /// TODO: replace with a decoded `MidnightBlock` once `receive_block`
-        /// is implemented, so the decode cost is paid once.
-        raw: RawBlock,
+        block: MidnightBlock,
     },
 }
 
@@ -272,57 +250,41 @@ where
         }
     }
 
-    /// Load data from storage that `compute()` will need.
-    ///
-    /// Fetch resolved inputs, protocol parameters, etc. here — `compute()`
-    /// must be I/O-free.
-    ///
-    /// TODO: implement per variant (query state/archive as required).
     fn load(&mut self, _domain: &D) -> Result<(), DomainError> {
-        match self {
-            Self::Genesis => todo!("load required storage data for midnight_genesis"),
-            Self::Roll { .. } => todo!("load required storage data for midnight_roll"),
-        }
+        Ok(())
     }
 
-    /// Perform the CPU-intensive ledger computation.
-    ///
-    /// No storage I/O is allowed here; everything must be loaded in `load()`.
-    ///
-    /// TODO: decode the block, validate transactions, compute UTxO deltas and
-    /// entity deltas.
     fn compute(&mut self) -> Result<(), DomainError> {
+        Ok(())
+    }
+
+    fn commit_state(&mut self, domain: &D) -> Result<(), DomainError> {
         match self {
-            Self::Genesis => todo!("compute ledger bootstrap for midnight_genesis"),
-            Self::Roll { .. } => todo!("compute ledger transition for midnight_roll"),
+            Self::Genesis => Ok(()),
+            Self::Roll { block } => {
+                let point = block.point();
+                let writer = domain.state().start_writer()?;
+                writer.set_cursor(point)?;
+                writer.commit()?;
+                Ok(())
+            }
         }
     }
 
-    /// Persist entity deltas and UTxO-set changes to the state store.
-    ///
-    /// TODO: write the deltas produced by `compute()` using a
-    /// `domain.state().start_writer()` transaction.
-    fn commit_state(&mut self, _domain: &D) -> Result<(), DomainError> {
+    fn commit_archive(&mut self, domain: &D) -> Result<(), DomainError> {
         match self {
-            Self::Genesis => todo!("commit_state for midnight_genesis"),
-            Self::Roll { .. } => todo!("commit_state for midnight_roll"),
+            Self::Genesis => Ok(()),
+            Self::Roll { block } => {
+                let point = block.point();
+                let raw = block.raw();
+                let writer = domain.archive().start_writer()?;
+                writer.apply(&point, &raw)?;
+                writer.commit()?;
+                Ok(())
+            }
         }
     }
 
-    /// Persist the raw block to the archive store.
-    ///
-    /// TODO: write the block bytes via `domain.archive()`.
-    fn commit_archive(&mut self, _domain: &D) -> Result<(), DomainError> {
-        match self {
-            Self::Genesis => todo!("commit_archive for midnight_genesis"),
-            Self::Roll { .. } => todo!("commit_archive for midnight_roll"),
-        }
-    }
-
-    /// Produce tip-change notifications for downstream subscribers.
-    ///
-    /// TODO: return `TipEvent::Apply(point, raw_block)` after each committed
-    /// block (and `TipEvent::Mark` at origin / epoch boundaries if applicable).
     fn tip_events(&self) -> Vec<TipEvent> {
         vec![]
     }
@@ -333,31 +295,12 @@ where
 // ---------------------------------------------------------------------------
 
 /// Midnight-specific [`ChainLogic`] implementation.
-///
-/// This is the primary integration point between the generic Dolos
-/// infrastructure and the Midnight blockchain.  An instance lives behind the
-/// `RwLock<Chain>` in every `Domain` implementation.
-///
-/// ## Lifecycle
-///
-/// 1. [`MidnightLogic::initialize`] — called once at startup.
-/// 2. [`MidnightLogic::can_receive_block`] — checked before each block is fed.
-/// 3. [`MidnightLogic::receive_block`] — queues a raw block for processing.
-/// 4. [`MidnightLogic::pop_work`] — returns the next [`MidnightWorkUnit`] to run.
-///
-/// The executor in `dolos-core` drives this loop and calls the work-unit
-/// pipeline for each item returned by `pop_work`.
 pub struct MidnightLogic {
     /// Midnight node configuration.
     pub config: MidnightConfig,
 
     /// The next block waiting to be turned into a [`MidnightWorkUnit`].
-    ///
-    /// TODO: replace with a proper work buffer once the Midnight block
-    /// pipeline is fleshed out (analogous to Cardano's `WorkBuffer` which
-    /// can queue multiple blocks and emit Genesis / Rupd / Ewrap / Estart
-    /// work units at the right chain positions).
-    pending_block: Option<RawBlock>,
+    pending_block: Option<MidnightBlock>,
 }
 
 impl ChainLogic for MidnightLogic {
@@ -370,15 +313,6 @@ impl ChainLogic for MidnightLogic {
     type WorkUnit<D: Domain<Chain = Self, Entity = Self::Entity, EntityDelta = Self::Delta>> =
         MidnightWorkUnit;
 
-    /// Initialize Midnight chain logic.
-    ///
-    /// TODO: load the Midnight genesis configuration from `config`, determine
-    /// the current sync cursor from `state`, and populate any cached data
-    /// structures (era summary, stability window, etc.).
-    ///
-    /// NOTE: the `genesis` parameter currently carries Cardano genesis files.
-    /// Once `dolos-core` is further generalised, this will be replaced by a
-    /// chain-agnostic genesis representation (or moved into `Config`).
     fn initialize<D: Domain>(
         config: Self::Config,
         _state: &D::State,
@@ -390,109 +324,62 @@ impl ChainLogic for MidnightLogic {
         })
     }
 
-    /// Returns `true` when no block is queued and a new one can be accepted.
     fn can_receive_block(&self) -> bool {
         self.pending_block.is_none()
     }
 
-    /// Accept a raw block and queue it for processing.
-    ///
-    /// Returns the slot of the block on success.
-    ///
-    /// TODO: decode the block header to extract the slot number, then store
-    /// the raw bytes in `self.pending_block`.
-    fn receive_block(&mut self, _raw: RawBlock) -> Result<BlockSlot, ChainError> {
-        todo!("decode Midnight block header to extract slot, queue block in pending_block")
+    fn receive_block(&mut self, raw: RawBlock) -> Result<BlockSlot, ChainError> {
+        let header = BlockHeader::decode(&mut raw.as_slice())
+            .map_err(|_e| ChainError::CantReceiveBlock(raw.clone()))?;
+        let slot = header.number.into();
+        self.pending_block = Some(MidnightBlock { raw, header });
+
+        Ok(slot)
     }
 
-    /// Return the next work unit to execute, or `None` if none is ready.
-    ///
-    /// Currently emits a `Roll` work unit for each queued block.
-    ///
-    /// TODO: extend to emit `Genesis` on first run, and any Midnight-specific
-    /// epoch-boundary work units at the appropriate chain positions.
     fn pop_work<D>(&mut self, _domain: &D) -> Option<MidnightWorkUnit>
     where
         D: Domain<Chain = Self, Entity = Self::Entity, EntityDelta = Self::Delta>,
     {
         self.pending_block
             .take()
-            .map(|raw| MidnightWorkUnit::Roll { raw })
+            .map(|block| MidnightWorkUnit::Roll { block })
     }
 
-    /// Compute the data needed to roll back a committed block.
-    ///
-    /// `inputs` is the resolved UTxO map saved in the WAL at commit time.
-    ///
-    /// TODO: decode the Midnight block, identify every UTxO produced and
-    /// consumed, and construct the inverse `UtxoSetDelta`, `IndexDelta`, and
-    /// `tx_hashes` list that the rollback executor requires.
     fn compute_undo(
         _block: &Bytes,
         _inputs: &HashMap<TxoRef, Arc<RawData>>,
         _point: ChainPoint,
     ) -> Result<UndoBlockData, ChainError> {
-        todo!("compute undo data for Midnight block rollback")
+        Ok(UndoBlockData {
+            utxo_delta: Default::default(),
+            index_delta: Default::default(),
+            tx_hashes: vec![],
+        })
     }
 
-    /// Decode a raw stored UTxO into a [`MidnightUtxo`].
-    ///
-    /// TODO: implement using the Midnight output encoding.
-    ///
-    /// NOTE: this method is marked for removal from [`ChainLogic`] in a
-    /// future `dolos-core` refactor (see TODO comment in core/src/lib.rs).
-    fn decode_utxo(&self, _utxo: Arc<RawData>) -> Result<MidnightUtxo, ChainError> {
-        todo!("decode RawData into MidnightUtxo using Midnight output encoding")
+    fn decode_utxo(&self, utxo: Arc<RawData>) -> Result<MidnightUtxo, ChainError> {
+        Ok(MidnightUtxo {
+            raw: (*utxo).clone(),
+        })
     }
 
-    /// Returns the number of mutable (rollback-able) slots.
-    ///
-    /// TODO: derive from the Midnight security parameter *k*.
-    ///
-    /// NOTE: this method is marked for removal from [`ChainLogic`] in a
-    /// future `dolos-core` refactor (see TODO comment in core/src/lib.rs).
     fn mutable_slots(_domain: &impl Domain) -> BlockSlot {
-        todo!("return the Midnight stability window (security parameter k in slots)")
+        2160u64
     }
 
-    /// Extract UTxO outputs produced by a transaction.
-    ///
-    /// Returns `(output_index, raw_output_bytes)` for each output.
-    ///
-    /// TODO: decode the transaction with the Midnight codec and extract
-    /// every output, encoding each as `RawData(protocol_version, bytes)`.
     fn tx_produces(_raw: &RawData) -> Vec<(u32, RawData)> {
-        todo!("decode Midnight tx and return (index, RawData) for each produced output")
+        vec![]
     }
 
-    /// Extract UTxO inputs consumed by a transaction.
-    ///
-    /// Returns a `TxoRef(tx_hash, output_index)` for every consumed input.
-    ///
-    /// TODO: decode the transaction with the Midnight codec and extract
-    /// every input reference.
     fn tx_consumes(_raw: &RawData) -> Vec<TxoRef> {
-        todo!("decode Midnight tx and return TxoRef for each consumed input")
+        vec![]
     }
 
-    /// Compute the hash of a transaction from its raw bytes.
-    ///
-    /// TODO: implement using Midnight's transaction ID algorithm.
     fn tx_hash(_raw: &RawData) -> Option<TxHash> {
-        todo!("hash a Midnight transaction to produce its TxHash")
+        None
     }
 
-    /// Validate a transaction against the current ledger state.
-    ///
-    /// On success, returns a [`MempoolTx`] ready to be added to the mempool.
-    ///
-    /// TODO: implement Midnight transaction validation:
-    ///   - Structural / phase-1 checks (well-formedness, fee adequacy, …)
-    ///   - ZK proof verification (phase-2 equivalent)
-    ///   - UTxO availability (inputs exist and are unspent)
-    ///
-    /// NOTE: the `genesis` parameter currently carries Cardano-specific data
-    /// and will be generalised in a future `dolos-core` refactor.
     fn validate_tx<D: Domain>(
         &self,
         _cbor: &[u8],
@@ -500,7 +387,9 @@ impl ChainLogic for MidnightLogic {
         _tip: Option<ChainPoint>,
         _genesis: &Genesis,
     ) -> Result<MempoolTx, ChainError> {
-        todo!("validate a Midnight transaction against current ledger state")
+        Err(ChainError::Phase2EvaluationError(
+            "midnight tx validation not yet implemented".to_string(),
+        ))
     }
 }
 
@@ -510,24 +399,68 @@ impl ChainLogic for MidnightLogic {
 
 /// Returns the number of mutable slots for the Midnight network.
 ///
-/// This free function is the counterpart of `dolos_cardano::mutable_slots`.
-/// It should be called from a `MidnightDomainAdapter::stability_window()`
-/// implementation (analogous to how `DomainAdapter` calls the Cardano version).
-///
 /// TODO: derive from the Midnight genesis / security parameter *k*.
 pub fn mutable_slots(_genesis: &Genesis) -> BlockSlot {
-    todo!("return the Midnight stability window derived from security parameter k")
+    2160u64
 }
 
 /// Returns the state-store schema for Midnight entities.
 ///
-/// Register one entry per namespace used by [`MidnightEntity`] variants,
-/// mapping each namespace to its storage type (`KeyValue` or `KeyMultiValue`).
-///
-/// The Cardano analogue is `CardanoEntity::schema()`.
-///
-/// TODO: insert namespace → type mappings once entity variants are defined,
-/// e.g.: `schema.insert(MidnightEntity::NS_PLACEHOLDER, NamespaceType::KeyValue);`
+/// TODO: insert namespace → type mappings once entity variants are defined.
 pub fn state_schema() -> StateSchema {
     StateSchema::default()
+}
+
+/// Encode a block from the Substrate JSON-RPC `chain_getBlock` response into
+/// a SCALE-encoded [`OpaqueBlock`] that can be fed to [`MidnightLogic::receive_block`].
+///
+/// `number_hex` is the `0x`-prefixed hex block number from the JSON header.
+/// `extrinsics` is the list of `0x`-prefixed hex-encoded extrinsic bytes.
+///
+/// Returns an error string if any hex field fails to decode.
+pub fn encode_block(
+    _hash: &str,
+    number_hex: &str,
+    extrinsics: &[String],
+) -> Result<RawBlock, String> {
+    let number = parse_block_number(number_hex)?;
+
+    let header = BlockHeader {
+        parent_hash: Default::default(),
+        number,
+        state_root: Default::default(),
+        extrinsics_root: Default::default(),
+        digest: Default::default(),
+    };
+
+    let opaque_extrinsics: Vec<sp_runtime::OpaqueExtrinsic> = extrinsics
+        .iter()
+        .map(|hex| {
+            let bytes = hex_to_bytes(hex)?;
+            sp_runtime::OpaqueExtrinsic::from_bytes(&bytes)
+                .map_err(|e| format!("invalid extrinsic: {e}"))
+        })
+        .collect::<Result<_, _>>()?;
+
+    let block = OpaqueBlock {
+        header,
+        extrinsics: opaque_extrinsics,
+    };
+
+    Ok(Arc::new(block.encode()))
+}
+
+/// Parse a `0x`-prefixed hex block number string into a [`BlockNumber`].
+fn parse_block_number(hex: &str) -> Result<BlockNumber, String> {
+    let hex = hex.trim_start_matches("0x");
+    u32::from_str_radix(hex, 16).map_err(|e| format!("invalid block number {hex:?}: {e}"))
+}
+
+/// Decode a `0x`-prefixed hex string into raw bytes.
+fn hex_to_bytes(hex: &str) -> Result<Vec<u8>, String> {
+    let hex = hex.trim_start_matches("0x");
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).map_err(|e| format!("invalid hex: {e}")))
+        .collect()
 }

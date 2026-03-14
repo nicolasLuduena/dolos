@@ -4,6 +4,12 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+midnight-primitives = { path = "../../../midnight-node/primitives/midnight" }
+#midnight-node-runtime = { path = "../../../midnight-node/runtime" }
+sp-runtime = { git = "https://github.com/paritytech/polkadot-sdk.git", tag = "polkadot-stable2509", default-features = false }
+parity-scale-codec = { version = "3.6.12", default-features = false, features = [
+  "derive",
+] }
 dolos-core = { path = "../core" }
 thiserror.workspace = true
 tracing.workspace = true
