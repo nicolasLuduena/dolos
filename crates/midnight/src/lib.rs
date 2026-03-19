@@ -1,26 +1,28 @@
-pub mod runtime;
 pub mod api;
+pub mod runtime;
 
+use crate::runtime::midnight_runtime::runtime_types::pallet_midnight::pallet::Call::send_mn_transaction;
+use crate::runtime::midnight_runtime::Call;
 use dolos_core::{
-    archive::{ArchiveWriter},
+    archive::ArchiveWriter,
     config::{StorageConfig, SyncConfig},
     state::{Entity, EntityDelta, EntityKey, Namespace, StateStore, StateWriter},
     work_unit::WorkUnit,
     BlockSlot, ChainError, ChainLogic, ChainPoint, Domain, DomainError, EraCbor, IndexDelta,
     TipEvent, TxoRef,
 };
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use thiserror::Error;
-use subxt::{OnlineClient, SubstrateConfig};
-use midnight_serialize::{tagged_deserialize};
-use midnight_ledger_v8::structure::{Transaction as LedgerTransactionV8, ProofMarker as ProofMarkerV8};
 use midnight_base_crypto::signatures::Signature as SignatureV7;
-use midnight_transient_crypto::commitment::PureGeneratorPedersen;
+use midnight_ledger_v8::structure::{
+    ProofMarker as ProofMarkerV8, Transaction as LedgerTransactionV8,
+};
+use midnight_serialize::tagged_deserialize;
 use midnight_storage_core::db::InMemoryDB;
-use crate::runtime::midnight_runtime::Call;
-use crate::runtime::midnight_runtime::runtime_types::pallet_midnight::pallet::Call::send_mn_transaction;
-use std::collections::{VecDeque};
+use midnight_transient_crypto::commitment::PureGeneratorPedersen;
+use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
+use std::sync::Arc;
+use subxt::{OnlineClient, SubstrateConfig};
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -286,7 +288,9 @@ pub struct MidnightWorkUnit<D: Domain> {
     pub _phantom: std::marker::PhantomData<D>,
 }
 
-impl<D: Domain<ChainSpecificError = Error, EntityDelta = MidnightDelta>> WorkUnit<D> for MidnightWorkUnit<D> {
+impl<D: Domain<ChainSpecificError = Error, EntityDelta = MidnightDelta>> WorkUnit<D>
+    for MidnightWorkUnit<D>
+{
     fn name(&self) -> &'static str {
         "midnight-work-unit"
     }
@@ -307,7 +311,11 @@ impl<D: Domain<ChainSpecificError = Error, EntityDelta = MidnightDelta>> WorkUni
 
 impl MidnightWorkUnit<MidnightDomain> {
     pub async fn compute_async(&mut self) -> Result<(), DomainError<Error>> {
-        let extrinsics = self.block.extrinsics().await.map_err(|e| DomainError::ChainError(ChainError::ChainSpecific(Error::Subxt(e))))?;
+        let extrinsics = self
+            .block
+            .extrinsics()
+            .await
+            .map_err(|e| DomainError::ChainError(ChainError::ChainSpecific(Error::Subxt(e))))?;
 
         for ext in extrinsics.iter() {
             if let Ok(call) = ext.as_root_extrinsic::<Call>() {
@@ -318,24 +326,59 @@ impl MidnightWorkUnit<MidnightDomain> {
                             match tx {
                                 LedgerTransactionV8::Standard(std_tx) => {
                                     for (segment_id, intent) in std_tx.intents {
-                                        let ledger_intent_hash = intent.erase_proofs().erase_signatures().intent_hash(segment_id);
-                                        let intent_hash_bytes = ledger_intent_hash.0.0;
+                                        let ledger_intent_hash = intent
+                                            .erase_proofs()
+                                            .erase_signatures()
+                                            .intent_hash(segment_id);
+                                        let intent_hash_bytes = ledger_intent_hash.0 .0;
 
-                                        for (idx, output) in intent.guaranteed_outputs().into_iter().enumerate() {
+                                        for (idx, output) in
+                                            intent.guaranteed_outputs().into_iter().enumerate()
+                                        {
                                             let utxo = UnshieldedUtxo {
                                                 intent_hash: intent_hash_bytes,
                                                 output_index: idx as u32,
                                                 amount: output.value,
-                                                owner: output.owner.0.0,
+                                                owner: output.owner.0 .0,
                                             };
-                                            
+
                                             let mut key_bytes = [0u8; 32];
-                                            key_bytes[0..28].copy_from_slice(&intent_hash_bytes[0..28]);
-                                            key_bytes[28..32].copy_from_slice(&(idx as u32).to_be_bytes());
+                                            key_bytes[0..28]
+                                                .copy_from_slice(&intent_hash_bytes[0..28]);
+                                            key_bytes[28..32]
+                                                .copy_from_slice(&(idx as u32).to_be_bytes());
 
                                             self.deltas.push(MidnightDelta {
                                                 key: EntityKey::from(&key_bytes),
-                                                new_value: MidnightDeltaValue::UnshieldedUtxo(Some(utxo)),
+                                                new_value: MidnightDeltaValue::UnshieldedUtxo(
+                                                    Some(utxo),
+                                                ),
+                                            });
+                                        }
+
+                                        // Also extract fallible outputs for now
+                                        for (idx, output) in
+                                            intent.fallible_outputs().into_iter().enumerate()
+                                        {
+                                            let utxo = UnshieldedUtxo {
+                                                intent_hash: intent_hash_bytes,
+                                                output_index: (idx + 1000) as u32, // Offset index to avoid collision
+                                                amount: output.value,
+                                                owner: output.owner.0 .0,
+                                            };
+
+                                            let mut key_bytes = [0u8; 32];
+                                            key_bytes[0..28]
+                                                .copy_from_slice(&intent_hash_bytes[0..28]);
+                                            key_bytes[28..32].copy_from_slice(
+                                                &((idx + 1000) as u32).to_be_bytes(),
+                                            );
+
+                                            self.deltas.push(MidnightDelta {
+                                                key: EntityKey::from(&key_bytes),
+                                                new_value: MidnightDeltaValue::UnshieldedUtxo(
+                                                    Some(utxo),
+                                                ),
                                             });
                                         }
                                     }
@@ -344,69 +387,118 @@ impl MidnightWorkUnit<MidnightDomain> {
                                     if let Some(gc) = std_tx.guaranteed_coins {
                                         for (out_idx, output) in gc.outputs.iter().enumerate() {
                                             let commitment = ZswapCommitment {
-                                                hash: output.coin_com.0.0,
+                                                hash: output.coin_com.0 .0,
                                             };
                                             let mut key_bytes = [0u8; 32];
                                             let block_hash_bytes = self.block.hash().0;
-                                            key_bytes[0..28].copy_from_slice(&block_hash_bytes[0..28]);
-                                            key_bytes[28..30].copy_from_slice(&(0u16).to_be_bytes());
-                                            key_bytes[30..32].copy_from_slice(&(out_idx as u16).to_be_bytes());
+                                            key_bytes[0..28]
+                                                .copy_from_slice(&block_hash_bytes[0..28]);
+                                            key_bytes[28..30]
+                                                .copy_from_slice(&(0u16).to_be_bytes());
+                                            key_bytes[30..32]
+                                                .copy_from_slice(&(out_idx as u16).to_be_bytes());
 
                                             self.deltas.push(MidnightDelta {
                                                 key: EntityKey::from(&key_bytes),
-                                                new_value: MidnightDeltaValue::ZswapCommitment(Some(commitment)),
+                                                new_value: MidnightDeltaValue::ZswapCommitment(
+                                                    Some(commitment),
+                                                ),
                                             });
                                         }
                                         for (in_idx, input) in gc.inputs.iter().enumerate() {
                                             let nullifier = ZswapNullifier {
-                                                hash: input.nullifier.0.0,
+                                                hash: input.nullifier.0 .0,
                                             };
                                             let mut key_bytes = [0u8; 32];
                                             let block_hash_bytes = self.block.hash().0;
-                                            key_bytes[0..28].copy_from_slice(&block_hash_bytes[0..28]);
-                                            key_bytes[28..30].copy_from_slice(&(0u16).to_be_bytes());
-                                            key_bytes[30..32].copy_from_slice(&(in_idx as u16).to_be_bytes());
+                                            key_bytes[0..28]
+                                                .copy_from_slice(&block_hash_bytes[0..28]);
+                                            key_bytes[28..30]
+                                                .copy_from_slice(&(0u16).to_be_bytes());
+                                            key_bytes[30..32]
+                                                .copy_from_slice(&(in_idx as u16).to_be_bytes());
 
                                             self.deltas.push(MidnightDelta {
                                                 key: EntityKey::from(&key_bytes),
-                                                new_value: MidnightDeltaValue::ZswapNullifier(Some(nullifier)),
+                                                new_value: MidnightDeltaValue::ZswapNullifier(
+                                                    Some(nullifier),
+                                                ),
                                             });
                                         }
                                     }
 
-                                    for (idx, (_, fc)) in std_tx.fallible_coins.into_iter().enumerate() {
+                                    for (idx, (_, fc)) in
+                                        std_tx.fallible_coins.into_iter().enumerate()
+                                    {
                                         let base_idx = (idx + 1) as u16; // offset from guaranteed
                                         for (out_idx, output) in fc.outputs.iter().enumerate() {
                                             let commitment = ZswapCommitment {
-                                                hash: output.coin_com.0.0,
+                                                hash: output.coin_com.0 .0,
                                             };
                                             let mut key_bytes = [0u8; 32];
                                             let block_hash_bytes = self.block.hash().0;
-                                            key_bytes[0..28].copy_from_slice(&block_hash_bytes[0..28]);
-                                            key_bytes[28..30].copy_from_slice(&(base_idx).to_be_bytes());
-                                            key_bytes[30..32].copy_from_slice(&(out_idx as u16).to_be_bytes());
+                                            key_bytes[0..28]
+                                                .copy_from_slice(&block_hash_bytes[0..28]);
+                                            key_bytes[28..30]
+                                                .copy_from_slice(&(base_idx).to_be_bytes());
+                                            key_bytes[30..32]
+                                                .copy_from_slice(&(out_idx as u16).to_be_bytes());
 
                                             self.deltas.push(MidnightDelta {
                                                 key: EntityKey::from(&key_bytes),
-                                                new_value: MidnightDeltaValue::ZswapCommitment(Some(commitment)),
+                                                new_value: MidnightDeltaValue::ZswapCommitment(
+                                                    Some(commitment),
+                                                ),
                                             });
                                         }
                                         for (in_idx, input) in fc.inputs.iter().enumerate() {
                                             let nullifier = ZswapNullifier {
-                                                hash: input.nullifier.0.0,
+                                                hash: input.nullifier.0 .0,
                                             };
                                             let mut key_bytes = [0u8; 32];
                                             let block_hash_bytes = self.block.hash().0;
-                                            key_bytes[0..28].copy_from_slice(&block_hash_bytes[0..28]);
-                                            key_bytes[28..30].copy_from_slice(&(base_idx).to_be_bytes());
-                                            key_bytes[30..32].copy_from_slice(&(in_idx as u16).to_be_bytes());
+                                            key_bytes[0..28]
+                                                .copy_from_slice(&block_hash_bytes[0..28]);
+                                            key_bytes[28..30]
+                                                .copy_from_slice(&(base_idx).to_be_bytes());
+                                            key_bytes[30..32]
+                                                .copy_from_slice(&(in_idx as u16).to_be_bytes());
 
                                             self.deltas.push(MidnightDelta {
                                                 key: EntityKey::from(&key_bytes),
-                                                new_value: MidnightDeltaValue::ZswapNullifier(Some(nullifier)),
+                                                new_value: MidnightDeltaValue::ZswapNullifier(
+                                                    Some(nullifier),
+                                                ),
                                             });
                                         }
                                     }
+                                }
+                                LedgerTransactionV8::ClaimRewards(claim) => {
+                                    use midnight_coin_structure::coin::UserAddress;
+                                    let owner_address = UserAddress::from(claim.owner.clone());
+                                    let owner_bytes = owner_address.0 .0;
+
+                                    // A pseudo-intent hash for the claim UTXO.
+                                    let mut intent_hash_bytes = [0u8; 32];
+                                    let tx_hash = self.block.hash().0;
+                                    intent_hash_bytes[0..16].copy_from_slice(&tx_hash[0..16]);
+                                    intent_hash_bytes[16..32].copy_from_slice(&owner_bytes[0..16]);
+
+                                    let utxo = UnshieldedUtxo {
+                                        intent_hash: intent_hash_bytes,
+                                        output_index: 0,
+                                        amount: claim.value,
+                                        owner: owner_bytes,
+                                    };
+
+                                    let mut key_bytes = [0u8; 32];
+                                    key_bytes[0..28].copy_from_slice(&intent_hash_bytes[0..28]);
+                                    key_bytes[28..32].copy_from_slice(&(0u32).to_be_bytes());
+
+                                    self.deltas.push(MidnightDelta {
+                                        key: EntityKey::from(&key_bytes),
+                                        new_value: MidnightDeltaValue::UnshieldedUtxo(Some(utxo)),
+                                    });
                                 }
                                 _ => {}
                             }
@@ -420,20 +512,29 @@ impl MidnightWorkUnit<MidnightDomain> {
         Ok(())
     }
 
-    fn commit_state_with_domain(&mut self, domain: &MidnightDomain) -> Result<(), DomainError<Error>> {
-        let writer = domain.state().start_writer().map_err(DomainError::StateError)?;
+    fn commit_state_with_domain(
+        &mut self,
+        domain: &MidnightDomain,
+    ) -> Result<(), DomainError<Error>> {
+        let writer = domain
+            .state()
+            .start_writer()
+            .map_err(DomainError::StateError)?;
         for delta in &self.deltas {
             match &delta.new_value {
                 MidnightDeltaValue::UnshieldedUtxo(u) => {
-                    writer.save_entity_typed(UTXO_NAMESPACE, &delta.key, u.as_ref())
+                    writer
+                        .save_entity_typed(UTXO_NAMESPACE, &delta.key, u.as_ref())
                         .map_err(DomainError::StateError)?;
                 }
                 MidnightDeltaValue::ZswapCommitment(c) => {
-                    writer.save_entity_typed(COMMITMENT_NAMESPACE, &delta.key, c.as_ref())
+                    writer
+                        .save_entity_typed(COMMITMENT_NAMESPACE, &delta.key, c.as_ref())
                         .map_err(DomainError::StateError)?;
                 }
                 MidnightDeltaValue::ZswapNullifier(n) => {
-                    writer.save_entity_typed(NULLIFIER_NAMESPACE, &delta.key, n.as_ref())
+                    writer
+                        .save_entity_typed(NULLIFIER_NAMESPACE, &delta.key, n.as_ref())
                         .map_err(DomainError::StateError)?;
                 }
             }
@@ -442,12 +543,30 @@ impl MidnightWorkUnit<MidnightDomain> {
         Ok(())
     }
 
-    fn commit_archive_with_domain(&mut self, domain: &MidnightDomain) -> Result<(), DomainError<Error>> {
-        let writer = domain.archive().start_writer().map_err(|e| DomainError::ArchiveError(dolos_core::archive::ArchiveError::InternalError(e.to_string())))?;
-        let point = ChainPoint::Specific(self.block.number() as u64, dolos_core::hash::Hash::new(self.block.hash().0));
-        
-        writer.apply(&point, &self.raw).map_err(|e| DomainError::ArchiveError(dolos_core::archive::ArchiveError::InternalError(e.to_string())))?;
-        writer.commit().map_err(|e| DomainError::ArchiveError(dolos_core::archive::ArchiveError::InternalError(e.to_string())))?;
+    fn commit_archive_with_domain(
+        &mut self,
+        domain: &MidnightDomain,
+    ) -> Result<(), DomainError<Error>> {
+        let writer = domain.archive().start_writer().map_err(|e| {
+            DomainError::ArchiveError(dolos_core::archive::ArchiveError::InternalError(
+                e.to_string(),
+            ))
+        })?;
+        let point = ChainPoint::Specific(
+            self.block.number() as u64,
+            dolos_core::hash::Hash::new(self.block.hash().0),
+        );
+
+        writer.apply(&point, &self.raw).map_err(|e| {
+            DomainError::ArchiveError(dolos_core::archive::ArchiveError::InternalError(
+                e.to_string(),
+            ))
+        })?;
+        writer.commit().map_err(|e| {
+            DomainError::ArchiveError(dolos_core::archive::ArchiveError::InternalError(
+                e.to_string(),
+            ))
+        })?;
         Ok(())
     }
 }
@@ -465,14 +584,23 @@ impl ChainLogic for MidnightLogic {
     type Genesis = MidnightGenesis;
     type ChainSpecificError = Error;
 
-    type WorkUnit<D: Domain<Chain = Self, Entity = Self::Entity, EntityDelta = Self::Delta, ChainSpecificError = Self::ChainSpecificError>> = MidnightWorkUnit<D>;
+    type WorkUnit<
+        D: Domain<
+            Chain = Self,
+            Entity = Self::Entity,
+            EntityDelta = Self::Delta,
+            ChainSpecificError = Self::ChainSpecificError,
+        >,
+    > = MidnightWorkUnit<D>;
 
     fn initialize<D: Domain>(
         _config: Self::Config,
         _state: &D::State,
         _genesis: Self::Genesis,
     ) -> Result<Self, ChainError<Self::ChainSpecificError>> {
-        Ok(Self { queue: VecDeque::new() })
+        Ok(Self {
+            queue: VecDeque::new(),
+        })
     }
 
     fn can_receive_block(&self) -> bool {
@@ -511,7 +639,10 @@ impl ChainLogic for MidnightLogic {
         })
     }
 
-    fn decode_utxo(&self, _utxo: Arc<EraCbor>) -> Result<Self::Utxo, ChainError<Self::ChainSpecificError>> {
+    fn decode_utxo(
+        &self,
+        _utxo: Arc<EraCbor>,
+    ) -> Result<Self::Utxo, ChainError<Self::ChainSpecificError>> {
         todo!()
     }
 
@@ -545,22 +676,22 @@ impl ChainLogic for MidnightLogic {
     }
 }
 
-pub type MidnightTransactionV8 = LedgerTransactionV8<
-    SignatureV7,
-    ProofMarkerV8,
-    PureGeneratorPedersen,
-    InMemoryDB,
->;
+pub type MidnightTransactionV8 =
+    LedgerTransactionV8<SignatureV7, ProofMarkerV8, PureGeneratorPedersen, InMemoryDB>;
 
 pub async fn start_sync(config: MidnightConfig, domain: MidnightDomain) -> Result<(), Error> {
     tracing::error!("Attempting to connect to Midnight RPC: {}", config.rpc_url);
-    
+
     let client = domain.subxt.clone();
 
     tracing::error!("Successfully connected to Midnight RPC!");
-    
+
     tracing::error!("Subscribing to finalized blocks...");
-    let mut finalized_blocks = client.blocks().subscribe_finalized().await.map_err(Error::Subxt)?;
+    let mut finalized_blocks = client
+        .blocks()
+        .subscribe_finalized()
+        .await
+        .map_err(Error::Subxt)?;
     tracing::error!("Subscription successful, waiting for blocks...");
 
     while let Some(block_result) = finalized_blocks.next().await {
@@ -597,7 +728,11 @@ pub async fn start_sync(config: MidnightConfig, domain: MidnightDomain) -> Resul
         for delta in &work.deltas {
             match &delta.new_value {
                 MidnightDeltaValue::UnshieldedUtxo(Some(utxo)) => {
-                    tracing::error!("  Indexed Unshielded UTXO: owner={}, amount={}", hex::encode(utxo.owner), utxo.amount);
+                    tracing::error!(
+                        "  Indexed Unshielded UTXO: owner={}, amount={}",
+                        hex::encode(utxo.owner),
+                        utxo.amount
+                    );
                 }
                 MidnightDeltaValue::ZswapCommitment(Some(c)) => {
                     tracing::error!("  Indexed Zswap Commitment: hash={}", hex::encode(c.hash));

@@ -1,8 +1,10 @@
 use clap::{Args, Subcommand};
+use dolos_core::config::{StorageConfig, SyncConfig};
+use dolos_midnight::{
+    start_sync, MidnightConfig, MidnightDelta, MidnightDomain, MidnightGenesis, MidnightLogic,
+};
 use miette::{IntoDiagnostic, Result};
 use std::path::Path;
-use dolos_midnight::{MidnightConfig, start_sync, MidnightDomain, MidnightLogic, MidnightGenesis, MidnightDelta};
-use dolos_core::config::{StorageConfig, SyncConfig};
 use std::sync::{Arc, RwLock};
 use subxt::{OnlineClient, SubstrateConfig};
 
@@ -67,11 +69,13 @@ fn run_daemon(args: &DaemonArgs) -> Result<()> {
     println!("Starting Midnight indexer with RPC: {}", config.rpc_url);
 
     let rt = tokio::runtime::Runtime::new().into_diagnostic()?;
-    
+
     rt.block_on(async {
         // Fetch metadata first
         println!("Fetching chain metadata...");
-        let client = OnlineClient::<SubstrateConfig>::from_url(&config.rpc_url).await.into_diagnostic()?;
+        let client = OnlineClient::<SubstrateConfig>::from_url(&config.rpc_url)
+            .await
+            .into_diagnostic()?;
         let genesis_hash = client.genesis_hash().0;
 
         // Setup Dolos storage
@@ -83,15 +87,33 @@ fn run_daemon(args: &DaemonArgs) -> Result<()> {
             ..Default::default()
         };
 
-        let state_store = dolos_fjall::StateStore::open(&storage_path.join("state"), &Default::default()).into_diagnostic()?;
-        let archive_store = dolos_redb3::archive::ArchiveStore::open(Default::default(), &storage_path.join("archive"), &Default::default()).into_diagnostic()?;
-        let index_store = dolos_fjall::IndexStore::open(&storage_path.join("index"), &Default::default()).into_diagnostic()?;
-        let wal_store = dolos_redb3::wal::RedbWalStore::<MidnightDelta>::open(&storage_path.join("wal"), &Default::default()).into_diagnostic()?;
+        let state_store =
+            dolos_fjall::StateStore::open(&storage_path.join("state"), &Default::default())
+                .into_diagnostic()?;
+        let archive_store = dolos_redb3::archive::ArchiveStore::open(
+            Default::default(),
+            &storage_path.join("archive"),
+            &Default::default(),
+        )
+        .into_diagnostic()?;
+        let index_store =
+            dolos_fjall::IndexStore::open(&storage_path.join("index"), &Default::default())
+                .into_diagnostic()?;
+        let wal_store = dolos_redb3::wal::RedbWalStore::<MidnightDelta>::open(
+            &storage_path.join("wal"),
+            &Default::default(),
+        )
+        .into_diagnostic()?;
         let mempool = dolos_core::builtin::EphemeralMempool::new();
-        
-        let genesis = Arc::new(MidnightGenesis { chain_id: 0, genesis_hash });
-        let logic = MidnightLogic { queue: std::collections::VecDeque::new() };
-        
+
+        let genesis = Arc::new(MidnightGenesis {
+            chain_id: 0,
+            genesis_hash,
+        });
+        let logic = MidnightLogic {
+            queue: std::collections::VecDeque::new(),
+        };
+
         let domain = MidnightDomain {
             storage_config: Arc::new(storage_config),
             sync_config: Arc::new(SyncConfig::default()),
@@ -110,7 +132,9 @@ fn run_daemon(args: &DaemonArgs) -> Result<()> {
             dolos_midnight::api::serve_api(api_domain, 8080).await;
         });
 
-        start_sync(config, domain).await.map_err(|e| miette::miette!(e.to_string()))
+        start_sync(config, domain)
+            .await
+            .map_err(|e| miette::miette!(e.to_string()))
     })?;
 
     Ok(())

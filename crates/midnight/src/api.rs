@@ -1,4 +1,7 @@
-use crate::{MidnightDomain, UnshieldedUtxo, UTXO_NAMESPACE, ZswapCommitment, COMMITMENT_NAMESPACE, ZswapNullifier, NULLIFIER_NAMESPACE};
+use crate::{
+    MidnightDomain, UnshieldedUtxo, ZswapCommitment, ZswapNullifier, COMMITMENT_NAMESPACE,
+    NULLIFIER_NAMESPACE, UTXO_NAMESPACE,
+};
 use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use dolos_core::state::{EntityKey, StateStore};
 use hex;
