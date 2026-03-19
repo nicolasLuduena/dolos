@@ -10,6 +10,9 @@ mod feedback;
 mod serve;
 mod sync;
 
+#[cfg(feature = "midnight")]
+mod midnight;
+
 #[cfg(feature = "utils")]
 mod init;
 
@@ -61,6 +64,10 @@ enum Command {
     /// runs a minikupo query in-process
     #[cfg(feature = "minikupo")]
     Minikupo(minikupo::Args),
+
+    /// Midnight specific commands
+    #[cfg(feature = "midnight")]
+    Midnight(midnight::MidnightArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -108,6 +115,9 @@ fn main() -> Result<()> {
 
         #[cfg(feature = "minikupo")]
         (Ok(config), Command::Minikupo(x)) => minikupo::run(&config, &x),
+
+        #[cfg(feature = "midnight")]
+        (_, Command::Midnight(args)) => midnight::run(&args),
 
         (Err(x), _) => Err(x),
     }

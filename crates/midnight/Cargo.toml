@@ -1,0 +1,41 @@
+[package]
+name = "dolos-midnight"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+dolos-core = { path = "../core" }
+dolos-fjall = { path = "../fjall" }
+dolos-redb3 = { path = "../redb3" }
+subxt = "0.44.2"
+subxt-signer = "0.44.2"
+midnight-base-crypto = { version = "1.0" }
+midnight-coin-structure = { version = "2.0" }
+midnight-ledger_v7 = { package = "midnight-ledger", version = "7.0.3" }
+midnight-ledger_v8 = { package = "midnight-ledger", version = "8.0.2" }
+midnight-onchain-runtime_v2 = { package = "midnight-onchain-runtime", version = "2.0" }
+midnight-onchain-runtime_v3 = { package = "midnight-onchain-runtime", version = "3.0.0" }
+midnight-serialize = { version = "1.0" }
+midnight-storage-core = { version = "1.1", features = ["layout-v2"] }
+midnight-transient-crypto = { version = "2.0" }
+midnight-zswap_v7 = { package = "midnight-zswap", version = "7.0.3" }
+midnight-zswap_v8 = { package = "midnight-zswap", version = "8.0.0" }
+
+serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = "0.1"
+tokio = { workspace = true }
+futures-util = { workspace = true }
+hex = { workspace = true }
+bincode = "1.3.3"
+trait-variant = "0.1.2"
+scale-decode = "0.16"
+parity-scale-codec = { version = "3", features = ["derive"] }
+axum = "0.8.4"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
