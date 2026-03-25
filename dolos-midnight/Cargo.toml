@@ -40,6 +40,7 @@ parity-scale-codec = { version = "3.7", optional = true }
 midnight-ledger = { path = "../../midnight-ledger/ledger", optional = true }
 midnight-zswap = { path = "../../midnight-ledger/zswap", optional = true }
 midnight-storage-core = { path = "../../midnight-ledger/storage-core", package = "midnight-storage-core", optional = true }
+midnight-base-crypto = { path = "../../midnight-ledger/base-crypto", optional = true }
 
 # Optional: midnight crypto for viewing key trial decryption
 midnight-transient-crypto = { path = "../../midnight-ledger/transient-crypto", optional = true }
@@ -48,5 +49,5 @@ midnight-serialize = { path = "../../midnight-ledger/serialize", optional = true
 
 [features]
 default = []
-subxt-sync = ["subxt", "parity-scale-codec", "midnight-ledger", "midnight-zswap", "midnight-serialize", "midnight-storage-core", "midnight-transient-crypto"]
+subxt-sync = ["subxt", "parity-scale-codec", "midnight-ledger", "midnight-zswap", "midnight-serialize", "midnight-storage-core", "midnight-transient-crypto", "midnight-base-crypto"]
 midnight-crypto = ["midnight-transient-crypto", "midnight-coin-structure", "midnight-serialize"]

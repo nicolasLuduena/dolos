@@ -85,6 +85,22 @@ pub trait BlockSource: Send + Sync + 'static {
 
     /// Fetch a single block by number.
     async fn fetch_block(&self, number: u64) -> Result<RawSubstrateBlock, SyncError>;
+
+    /// Fetch multiple blocks concurrently.
+    ///
+    /// Default implementation calls `fetch_block` sequentially. Implementations
+    /// with a persistent connection (e.g. subxt over WebSocket) should override
+    /// this to fire concurrent requests for better throughput.
+    async fn fetch_blocks(
+        &self,
+        numbers: &[u64],
+    ) -> Result<Vec<RawSubstrateBlock>, SyncError> {
+        let mut blocks = Vec::with_capacity(numbers.len());
+        for &n in numbers {
+            blocks.push(self.fetch_block(n).await?);
+        }
+        Ok(blocks)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -139,6 +155,7 @@ mod subxt_source {
     use std::pin::Pin;
     use std::time::Duration;
 
+    use futures_util::{StreamExt, TryStreamExt};
     use subxt::backend::legacy::LegacyRpcMethods;
     use subxt::backend::rpc::reconnecting_rpc_client::{ExponentialBackoff, RpcClient};
     use subxt::blocks::Extrinsics;
@@ -154,31 +171,52 @@ mod subxt_source {
 
     pub struct SubxtBlockSource {
         ws_url: String,
+        /// How many blocks to fetch concurrently in each backfill batch.
+        backfill_batch_size: usize,
+        /// Lazily-initialized, reused WebSocket connection.
+        conn: tokio::sync::OnceCell<(OnlineClient<SubstrateConfig>, RpcClient)>,
     }
 
     impl SubxtBlockSource {
-        pub fn new(ws_url: String) -> Self {
-            Self { ws_url }
+        pub fn new(ws_url: String, backfill_batch_size: usize) -> Self {
+            Self {
+                ws_url,
+                backfill_batch_size,
+                conn: tokio::sync::OnceCell::new(),
+            }
         }
 
-        async fn connect(
+        /// Return a shared reference to the cached connection, creating it on
+        /// first call.  Both `OnlineClient` and `RpcClient` are cheaply
+        /// cloneable (`Arc` inside), and the reconnecting RPC client handles
+        /// transport-level reconnections automatically.
+        async fn connection(
             &self,
-        ) -> Result<(OnlineClient<SubstrateConfig>, RpcClient), SyncError> {
-            let rpc = RpcClient::builder()
-                .retry_policy(
-                    ExponentialBackoff::from_millis(10)
-                        .max_delay(Duration::from_secs(30))
-                        .take(20),
-                )
-                .build(self.ws_url.clone())
-                .await
-                .map_err(|e| SyncError::Connection(format!("RPC connect failed: {e}")))?;
+        ) -> Result<&(OnlineClient<SubstrateConfig>, RpcClient), SyncError> {
+            self.conn
+                .get_or_try_init(|| async {
+                    let rpc = RpcClient::builder()
+                        .retry_policy(
+                            ExponentialBackoff::from_millis(10)
+                                .max_delay(Duration::from_secs(30))
+                                .take(20),
+                        )
+                        .build(self.ws_url.clone())
+                        .await
+                        .map_err(|e| {
+                            SyncError::Connection(format!("RPC connect failed: {e}"))
+                        })?;
 
-            let client = OnlineClient::<SubstrateConfig>::from_rpc_client(rpc.clone())
-                .await
-                .map_err(|e| SyncError::Connection(format!("OnlineClient failed: {e}")))?;
+                    let client =
+                        OnlineClient::<SubstrateConfig>::from_rpc_client(rpc.clone())
+                            .await
+                            .map_err(|e| {
+                                SyncError::Connection(format!("OnlineClient failed: {e}"))
+                            })?;
 
-            Ok((client, rpc))
+                    Ok((client, rpc))
+                })
+                .await
         }
 
         /// Decode extrinsics and extract midnight transactions + timestamp.
@@ -284,7 +322,9 @@ mod subxt_source {
             >,
             SyncError,
         > {
-            let (client, rpc) = self.connect().await?;
+            let (client, rpc) = self.connection().await?;
+            let (client, rpc) = (client.clone(), rpc.clone());
+            let batch_size = self.backfill_batch_size;
 
             // Get the current finalized tip
             let latest = client
@@ -296,17 +336,29 @@ mod subxt_source {
 
             let start = from_block.unwrap_or(tip_number);
 
-            info!(start, tip_number, "starting block source");
+            info!(start, tip_number, backfill_batch_size = batch_size, "starting block source");
 
             let stream = async_stream::try_stream! {
-                // Phase 1: Gap-fill — fetch historical blocks sequentially
+                // Phase 1: Gap-fill — fetch historical blocks in batches.
+                // Each batch fires all requests concurrently, then yields
+                // them in order before starting the next batch.
                 if start <= tip_number {
-                    for num in start..=tip_number {
-                        let block = Self::block_at_number(&client, &rpc, num).await?;
-                        if num % 1000 == 0 {
-                            info!(block = num, "backfill progress");
+                    let numbers: Vec<u64> = (start..=tip_number).collect();
+                    for chunk in numbers.chunks(batch_size) {
+                        let futs: Vec<_> = chunk
+                            .iter()
+                            .map(|&n| Self::block_at_number(&client, &rpc, n))
+                            .collect();
+
+                        let results = futures_util::future::join_all(futs).await;
+
+                        for result in results {
+                            let block = result?;
+                            if block.number % 1000 == 0 {
+                                info!(block = block.number, "backfill progress");
+                            }
+                            yield block;
                         }
-                        yield block;
                     }
                 }
 
@@ -384,8 +436,28 @@ mod subxt_source {
         }
 
         async fn fetch_block(&self, number: u64) -> Result<RawSubstrateBlock, SyncError> {
-            let (client, rpc) = self.connect().await?;
-            Self::block_at_number(&client, &rpc, number).await
+            let (client, rpc) = self.connection().await?;
+            Self::block_at_number(client, rpc, number).await
+        }
+
+        async fn fetch_blocks(
+            &self,
+            numbers: &[u64],
+        ) -> Result<Vec<RawSubstrateBlock>, SyncError> {
+            if numbers.is_empty() {
+                return Ok(Vec::new());
+            }
+
+            let (client, rpc) = self.connection().await?;
+
+            // Fetch all blocks concurrently over the shared connection,
+            // bounded by backfill_batch_size.
+            let concurrency = self.backfill_batch_size;
+            futures_util::stream::iter(numbers.iter().copied())
+                .map(|n| Self::block_at_number(client, rpc, n))
+                .buffered(concurrency)
+                .try_collect()
+                .await
         }
     }
 }

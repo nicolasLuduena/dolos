@@ -156,7 +156,10 @@ async fn run_daemon(config_path: &str) -> Result<(), Box<dyn std::error::Error>>
 
     let sync_handle = tokio::spawn(async move {
         #[cfg(feature = "subxt-sync")]
-        let source = block_source::SubxtBlockSource::new(config.node.ws_url.clone());
+        let source = block_source::SubxtBlockSource::new(
+            config.node.ws_url.clone(),
+            config.node.sync_batch_size,
+        );
 
         #[cfg(not(feature = "subxt-sync"))]
         let source = block_source::MockBlockSource;
