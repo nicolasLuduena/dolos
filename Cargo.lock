@@ -1403,6 +1403,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "dolos-midnight"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum 0.8.4",
+ "bincode",
+ "clap",
+ "dolos-core",
+ "dolos-redb3",
+ "futures-core",
+ "futures-util",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.12",
+ "tokio",
+ "toml 0.8.20",
+ "tower-http 0.6.6",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "dolos-minibf"
 version = "1.0.0"
 dependencies = [

@@ -178,6 +178,7 @@ members = [
     "crates/minibf",
     "crates/redb3",
     "xtask", "crates/minikupo",
+    "dolos-midnight",
 ]
 
 [workspace.package]
