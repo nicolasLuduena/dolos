@@ -1867,6 +1867,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "hex",
+ "jsonrpsee",
  "midnight-base-crypto",
  "midnight-coin-structure",
  "midnight-ledger",

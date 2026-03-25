@@ -153,12 +153,16 @@ impl BlockSource for MockBlockSource {
 #[cfg(feature = "subxt-sync")]
 mod subxt_source {
     use std::pin::Pin;
+    use std::sync::Arc;
     use std::time::Duration;
 
     use futures_util::{StreamExt, TryStreamExt};
-    use subxt::backend::legacy::LegacyRpcMethods;
+    use jsonrpsee::core::client::ClientT;
+    use jsonrpsee::core::params::BatchRequestBuilder;
+    use jsonrpsee::ws_client::WsClient;
     use subxt::backend::rpc::reconnecting_rpc_client::{ExponentialBackoff, RpcClient};
     use subxt::blocks::Extrinsics;
+    use subxt::config::substrate::H256;
     use subxt::{OnlineClient, SubstrateConfig};
     use tracing::{info, warn};
 
@@ -169,12 +173,22 @@ mod subxt_source {
 
     const SUBSCRIPTION_RECOVERY_TIMEOUT: Duration = Duration::from_secs(30);
 
+    /// Cached connection state: subxt client + reconnecting RPC + raw jsonrpsee WS client.
+    struct Connection {
+        client: OnlineClient<SubstrateConfig>,
+        rpc: RpcClient,
+        /// Raw jsonrpsee WS client for batch RPC requests.
+        /// The subxt reconnecting client doesn't expose `batch_request`,
+        /// so we keep a separate raw client for that.
+        batch_client: Arc<WsClient>,
+    }
+
     pub struct SubxtBlockSource {
         ws_url: String,
         /// How many blocks to fetch concurrently in each backfill batch.
         backfill_batch_size: usize,
-        /// Lazily-initialized, reused WebSocket connection.
-        conn: tokio::sync::OnceCell<(OnlineClient<SubstrateConfig>, RpcClient)>,
+        /// Lazily-initialized, reused connections.
+        conn: tokio::sync::OnceCell<Connection>,
     }
 
     impl SubxtBlockSource {
@@ -190,9 +204,7 @@ mod subxt_source {
         /// first call.  Both `OnlineClient` and `RpcClient` are cheaply
         /// cloneable (`Arc` inside), and the reconnecting RPC client handles
         /// transport-level reconnections automatically.
-        async fn connection(
-            &self,
-        ) -> Result<&(OnlineClient<SubstrateConfig>, RpcClient), SyncError> {
+        async fn connection(&self) -> Result<&Connection, SyncError> {
             self.conn
                 .get_or_try_init(|| async {
                     let rpc = RpcClient::builder()
@@ -214,7 +226,22 @@ mod subxt_source {
                                 SyncError::Connection(format!("OnlineClient failed: {e}"))
                             })?;
 
-                    Ok((client, rpc))
+                    // Separate raw jsonrpsee WS client for batch requests.
+                    let batch_client =
+                        jsonrpsee::ws_client::WsClientBuilder::default()
+                            .build(&self.ws_url)
+                            .await
+                            .map_err(|e| {
+                                SyncError::Connection(format!(
+                                    "batch WS client failed: {e}"
+                                ))
+                            })?;
+
+                    Ok(Connection {
+                        client,
+                        rpc,
+                        batch_client: Arc::new(batch_client),
+                    })
                 })
                 .await
         }
@@ -270,19 +297,45 @@ mod subxt_source {
             Ok((midnight_txs, timestamp_val))
         }
 
-        async fn block_at_number(
-            client: &OnlineClient<SubstrateConfig>,
-            rpc: &RpcClient,
-            number: u64,
-        ) -> Result<RawSubstrateBlock, SyncError> {
-            let legacy = LegacyRpcMethods::<SubstrateConfig>::new(rpc.clone().into());
+        /// Batch-resolve block numbers to hashes in a single JSON-RPC
+        /// batch request.  Returns hashes in the same order as `numbers`.
+        async fn batch_get_block_hashes(
+            batch_client: &WsClient,
+            numbers: &[u64],
+        ) -> Result<Vec<H256>, SyncError> {
+            let mut batch = BatchRequestBuilder::new();
+            for &n in numbers {
+                // `chain_getBlockHash` expects a single number param.
+                batch
+                    .insert("chain_getBlockHash", jsonrpsee::rpc_params![n])
+                    .map_err(|e| SyncError::Decode(format!("batch param error: {e}")))?;
+            }
 
-            let hash = legacy
-                .chain_get_block_hash(Some(number.into()))
+            let responses = batch_client
+                .batch_request::<Option<H256>>(batch)
                 .await
-                .map_err(|e| SyncError::Connection(format!("block hash lookup: {e}")))?
-                .ok_or(SyncError::BlockNotFound(number))?;
+                .map_err(|e| SyncError::Connection(format!("batch hash request: {e}")))?;
 
+            let mut hashes = Vec::with_capacity(numbers.len());
+            for (i, entry) in responses.into_iter().enumerate() {
+                let maybe_hash = entry.map_err(|e| {
+                    SyncError::Connection(format!(
+                        "batch hash entry {}: {}",
+                        numbers[i], e
+                    ))
+                })?;
+                let hash = maybe_hash.ok_or(SyncError::BlockNotFound(numbers[i]))?;
+                hashes.push(hash);
+            }
+
+            Ok(hashes)
+        }
+
+        /// Fetch a block by its hash (skipping the hash-lookup RPC call).
+        async fn block_at_hash(
+            client: &OnlineClient<SubstrateConfig>,
+            hash: H256,
+        ) -> Result<RawSubstrateBlock, SyncError> {
             let block = client
                 .blocks()
                 .at(hash)
@@ -305,6 +358,27 @@ mod subxt_source {
                 timestamp,
             })
         }
+
+        /// Fetch a block by number (hash lookup + block fetch — 2 round-trips).
+        /// Used only for single-block requests; batch operations use
+        /// `batch_get_block_hashes` + `block_at_hash` instead.
+        async fn block_at_number(
+            client: &OnlineClient<SubstrateConfig>,
+            rpc: &RpcClient,
+            number: u64,
+        ) -> Result<RawSubstrateBlock, SyncError> {
+            use subxt::backend::legacy::LegacyRpcMethods;
+
+            let legacy = LegacyRpcMethods::<SubstrateConfig>::new(rpc.clone().into());
+
+            let hash = legacy
+                .chain_get_block_hash(Some(number.into()))
+                .await
+                .map_err(|e| SyncError::Connection(format!("block hash lookup: {e}")))?
+                .ok_or(SyncError::BlockNotFound(number))?;
+
+            Self::block_at_hash(client, hash).await
+        }
     }
 
     #[async_trait::async_trait]
@@ -322,8 +396,9 @@ mod subxt_source {
             >,
             SyncError,
         > {
-            let (client, rpc) = self.connection().await?;
-            let (client, rpc) = (client.clone(), rpc.clone());
+            let conn = self.connection().await?;
+            let client = conn.client.clone();
+            let batch_ws = conn.batch_client.clone();
             let batch_size = self.backfill_batch_size;
 
             // Get the current finalized tip
@@ -340,14 +415,20 @@ mod subxt_source {
 
             let stream = async_stream::try_stream! {
                 // Phase 1: Gap-fill — fetch historical blocks in batches.
-                // Each batch fires all requests concurrently, then yields
-                // them in order before starting the next batch.
+                // Step 1: Batch `chain_getBlockHash` → all hashes in 1 round-trip.
+                // Step 2: Fetch block bodies concurrently via subxt.
                 if start <= tip_number {
                     let numbers: Vec<u64> = (start..=tip_number).collect();
                     for chunk in numbers.chunks(batch_size) {
-                        let futs: Vec<_> = chunk
-                            .iter()
-                            .map(|&n| Self::block_at_number(&client, &rpc, n))
+                        // Batch-resolve all hashes in a single JSON-RPC call.
+                        let hashes = Self::batch_get_block_hashes(
+                            &batch_ws, chunk,
+                        ).await?;
+
+                        // Fetch block bodies concurrently by hash.
+                        let futs: Vec<_> = hashes
+                            .into_iter()
+                            .map(|h| Self::block_at_hash(&client, h))
                             .collect();
 
                         let results = futures_util::future::join_all(futs).await;
@@ -436,8 +517,8 @@ mod subxt_source {
         }
 
         async fn fetch_block(&self, number: u64) -> Result<RawSubstrateBlock, SyncError> {
-            let (client, rpc) = self.connection().await?;
-            Self::block_at_number(client, rpc, number).await
+            let conn = self.connection().await?;
+            Self::block_at_number(&conn.client, &conn.rpc, number).await
         }
 
         async fn fetch_blocks(
@@ -448,14 +529,16 @@ mod subxt_source {
                 return Ok(Vec::new());
             }
 
-            let (client, rpc) = self.connection().await?;
+            let conn = self.connection().await?;
 
-            // Fetch all blocks concurrently over the shared connection,
-            // bounded by backfill_batch_size.
-            let concurrency = self.backfill_batch_size;
-            futures_util::stream::iter(numbers.iter().copied())
-                .map(|n| Self::block_at_number(client, rpc, n))
-                .buffered(concurrency)
+            // Step 1: Batch-resolve all hashes in a single JSON-RPC call.
+            let hashes =
+                Self::batch_get_block_hashes(&conn.batch_client, numbers).await?;
+
+            // Step 2: Fetch block bodies concurrently (bounded by batch size).
+            futures_util::stream::iter(hashes.into_iter())
+                .map(|h| Self::block_at_hash(&conn.client, h))
+                .buffered(self.backfill_batch_size)
                 .try_collect()
                 .await
         }

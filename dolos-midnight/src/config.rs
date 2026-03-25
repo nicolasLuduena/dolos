@@ -21,7 +21,7 @@ pub struct NodeConfig {
 }
 
 fn default_batch_size() -> usize {
-    100
+    20
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

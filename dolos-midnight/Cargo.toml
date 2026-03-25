@@ -34,6 +34,7 @@ async-stream = "0.3"
 
 # Optional: real Substrate node sync + extrinsic parsing
 subxt = { version = "0.44", features = ["reconnecting-rpc-client"], optional = true }
+jsonrpsee = { version = "0.24", features = ["ws-client"], optional = true }
 parity-scale-codec = { version = "3.7", optional = true }
 
 # Optional: midnight ledger for real tx parsing (behind subxt-sync)
@@ -49,5 +50,5 @@ midnight-serialize = { path = "../../midnight-ledger/serialize", optional = true
 
 [features]
 default = []
-subxt-sync = ["subxt", "parity-scale-codec", "midnight-ledger", "midnight-zswap", "midnight-serialize", "midnight-storage-core", "midnight-transient-crypto", "midnight-base-crypto"]
+subxt-sync = ["subxt", "jsonrpsee", "parity-scale-codec", "midnight-ledger", "midnight-zswap", "midnight-serialize", "midnight-storage-core", "midnight-transient-crypto", "midnight-base-crypto"]
 midnight-crypto = ["midnight-transient-crypto", "midnight-coin-structure", "midnight-serialize"]
