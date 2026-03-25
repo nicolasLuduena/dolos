@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
-use axum::{extract::State, routing, Json, Router};
+use axum::{extract::State, http::StatusCode, routing, Json, Router};
 use serde::{Deserialize, Serialize};
 
 use dolos_core::StateStore;
 
 use crate::decrypt::UtxoDecryptor;
 use crate::domain::MidnightDomain;
+use crate::model::{MidnightEntity, NS_SHIELDED_UTXO, NS_UNSHIELDED_UTXO};
 
 // ---------------------------------------------------------------------------
 // Shared state for Axum handlers
@@ -90,53 +91,194 @@ pub struct StatusResponse {
     pub tip_hash: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+struct ApiError {
+    error: String,
+}
+
 // ---------------------------------------------------------------------------
-// Handlers (stubs — Front 3 fills these in)
+// Helpers
+// ---------------------------------------------------------------------------
+
+fn read_tip_slot(state: &MidnightDomain) -> Option<u64> {
+    state
+        .state
+        .read_cursor()
+        .ok()
+        .flatten()
+        .map(|p| p.slot())
+}
+
+fn parse_hex_32(hex_str: &str) -> Result<[u8; 32], String> {
+    let bytes = hex::decode(hex_str).map_err(|e| format!("invalid hex: {e}"))?;
+    if bytes.len() != 32 {
+        return Err(format!("expected 32 bytes, got {}", bytes.len()));
+    }
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&bytes);
+    Ok(arr)
+}
+
+// ---------------------------------------------------------------------------
+// Handlers
 // ---------------------------------------------------------------------------
 
 async fn query_shielded_utxos<D: UtxoDecryptor>(
     State(state): State<Arc<ApiState<D>>>,
-    Json(_req): Json<ShieldedUtxoRequest>,
-) -> Json<ShieldedUtxoResponse> {
-    // Front 3 will: iterate NS_SHIELDED_UTXO entities, trial-decrypt with
-    // the viewing key, filter by slot range and spent status.
-    let tip_slot = state
+    Json(req): Json<ShieldedUtxoRequest>,
+) -> Result<Json<ShieldedUtxoResponse>, (StatusCode, Json<ApiError>)> {
+    let viewing_key = parse_hex_32(&req.viewing_key).map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiError { error: e }),
+        )
+    })?;
+
+    let tip_slot = read_tip_slot(&state.domain);
+
+    let iter = state
         .domain
         .state
-        .read_cursor()
-        .ok()
-        .flatten()
-        .map(|p| match p {
-            dolos_core::ChainPoint::Specific(slot, _) => slot,
-            _ => 0,
-        });
+        .iter_entities_typed::<MidnightEntity>(NS_SHIELDED_UTXO, None)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: format!("state iteration error: {e}"),
+                }),
+            )
+        })?;
 
-    Json(ShieldedUtxoResponse {
-        utxos: Vec::new(),
-        tip_slot,
-    })
+    let mut utxos = Vec::new();
+
+    for entry in iter {
+        let (_key, entity) = entry.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: format!("entity decode error: {e}"),
+                }),
+            )
+        })?;
+
+        let utxo_state = match &entity {
+            MidnightEntity::ShieldedUtxo(s) => s,
+            _ => continue,
+        };
+
+        // Slot range filter
+        if let Some(from) = req.from_slot {
+            if utxo_state.created_slot < from {
+                continue;
+            }
+        }
+        if let Some(to) = req.to_slot {
+            if utxo_state.created_slot > to {
+                continue;
+            }
+        }
+
+        // Spent filter
+        if !req.include_spent && utxo_state.spent_slot.is_some() {
+            continue;
+        }
+
+        // Trial decryption — only include UTxOs visible to this viewing key
+        if !state.decryptor.can_decrypt(&viewing_key, utxo_state) {
+            continue;
+        }
+
+        let decrypted = state
+            .decryptor
+            .decrypt_info(&viewing_key, utxo_state)
+            .map(|info| DecryptedInfo {
+                value: info.value.to_string(),
+                token_type: info.token_type.map(hex::encode),
+            });
+
+        utxos.push(ShieldedUtxoInfo {
+            intent_hash: hex::encode(utxo_state.intent_hash),
+            output_index: utxo_state.output_index,
+            created_slot: utxo_state.created_slot,
+            created_tx_hash: hex::encode(utxo_state.created_tx_hash),
+            spent_slot: utxo_state.spent_slot,
+            spent_tx_hash: utxo_state.spent_tx_hash.map(hex::encode),
+            decrypted,
+        });
+    }
+
+    Ok(Json(ShieldedUtxoResponse { utxos, tip_slot }))
 }
 
 async fn query_unshielded_utxos<D: UtxoDecryptor>(
     State(state): State<Arc<ApiState<D>>>,
-    axum::extract::Query(_query): axum::extract::Query<UnshieldedQuery>,
-) -> Json<UnshieldedUtxoResponse> {
-    // Front 3 will: iterate NS_UNSHIELDED_UTXO entities, filter by owner.
-    let tip_slot = state
+    axum::extract::Query(query): axum::extract::Query<UnshieldedQuery>,
+) -> Result<Json<UnshieldedUtxoResponse>, (StatusCode, Json<ApiError>)> {
+    let owner_filter = query
+        .owner
+        .as_deref()
+        .map(parse_hex_32)
+        .transpose()
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                Json(ApiError { error: e }),
+            )
+        })?;
+
+    let tip_slot = read_tip_slot(&state.domain);
+
+    let iter = state
         .domain
         .state
-        .read_cursor()
-        .ok()
-        .flatten()
-        .map(|p| match p {
-            dolos_core::ChainPoint::Specific(slot, _) => slot,
-            _ => 0,
-        });
+        .iter_entities_typed::<MidnightEntity>(NS_UNSHIELDED_UTXO, None)
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: format!("state iteration error: {e}"),
+                }),
+            )
+        })?;
 
-    Json(UnshieldedUtxoResponse {
-        utxos: Vec::new(),
-        tip_slot,
-    })
+    let mut utxos = Vec::new();
+
+    for entry in iter {
+        let (_key, entity) = entry.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiError {
+                    error: format!("entity decode error: {e}"),
+                }),
+            )
+        })?;
+
+        let utxo_state = match &entity {
+            MidnightEntity::UnshieldedUtxo(s) => s,
+            _ => continue,
+        };
+
+        // Owner filter
+        if let Some(ref owner) = owner_filter {
+            if utxo_state.owner != *owner {
+                continue;
+            }
+        }
+
+        utxos.push(UnshieldedUtxoInfo {
+            owner: hex::encode(utxo_state.owner),
+            token_type: hex::encode(utxo_state.token_type),
+            value: utxo_state.value.to_string(),
+            intent_hash: hex::encode(utxo_state.intent_hash),
+            output_index: utxo_state.output_index,
+            created_slot: utxo_state.created_slot,
+            created_tx_hash: hex::encode(utxo_state.created_tx_hash),
+            spent_slot: utxo_state.spent_slot,
+            spent_tx_hash: utxo_state.spent_tx_hash.map(hex::encode),
+        });
+    }
+
+    Ok(Json(UnshieldedUtxoResponse { utxos, tip_slot }))
 }
 
 async fn get_status<D: UtxoDecryptor>(
@@ -158,10 +300,7 @@ async fn get_status<D: UtxoDecryptor>(
 // Router
 // ---------------------------------------------------------------------------
 
-pub fn router<D: UtxoDecryptor + 'static>(
-    domain: MidnightDomain,
-    decryptor: D,
-) -> Router {
+pub fn router<D: UtxoDecryptor + 'static>(domain: MidnightDomain, decryptor: D) -> Router {
     let state = Arc::new(ApiState { domain, decryptor });
 
     Router::new()

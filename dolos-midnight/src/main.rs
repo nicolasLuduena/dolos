@@ -1,3 +1,6 @@
+// Phase 0 stub crate — many types are defined ahead of use.
+#![allow(dead_code)]
+
 use std::sync::{Arc, RwLock};
 
 use clap::{Parser, Subcommand};
@@ -121,9 +124,14 @@ async fn run_daemon(config_path: &str) -> Result<(), Box<dyn std::error::Error>>
 
     // Spawn sync loop + API server concurrently
     let sync_domain = domain.clone();
-    let source = block_source::MockBlockSource;
 
     let sync_handle = tokio::spawn(async move {
+        #[cfg(feature = "subxt-sync")]
+        let source = block_source::SubxtBlockSource::new(config.node.ws_url.clone());
+
+        #[cfg(not(feature = "subxt-sync"))]
+        let source = block_source::MockBlockSource;
+
         if let Err(e) = sync_loop::run_sync(sync_domain, source).await {
             tracing::error!(error = %e, "sync loop failed");
         }

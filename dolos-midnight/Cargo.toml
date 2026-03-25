@@ -29,3 +29,12 @@ async-trait = "0.1"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 sha2 = "0.10"
 toml = "0.8"
+tokio-stream = "0.1"
+async-stream = "0.3"
+
+# Optional: real Substrate node sync
+subxt = { version = "0.44", features = ["reconnecting-rpc-client"], optional = true }
+
+[features]
+default = []
+subxt-sync = ["subxt"]
