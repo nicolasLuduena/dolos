@@ -161,7 +161,7 @@ async fn run_daemon(config_path: &str) -> Result<(), Box<dyn std::error::Error>>
         #[cfg(not(feature = "subxt-sync"))]
         let source = block_source::MockBlockSource;
 
-        if let Err(e) = sync_loop::run_sync(sync_domain, source).await {
+        if let Err(e) = sync_loop::run_sync(sync_domain, source, config.node.sync_batch_size).await {
             tracing::error!(error = %e, "sync loop failed");
         }
     });
