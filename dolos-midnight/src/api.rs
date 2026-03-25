@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use axum::{extract::State, http::StatusCode, routing, Json, Router};
 use serde::{Deserialize, Serialize};
+use tracing::{debug, info, warn};
 
 use dolos_core::StateStore;
 
@@ -127,7 +128,15 @@ async fn query_shielded_utxos<D: UtxoDecryptor>(
     State(state): State<Arc<ApiState<D>>>,
     Json(req): Json<ShieldedUtxoRequest>,
 ) -> Result<Json<ShieldedUtxoResponse>, (StatusCode, Json<ApiError>)> {
+    info!(
+        from_slot = ?req.from_slot,
+        to_slot = ?req.to_slot,
+        include_spent = req.include_spent,
+        "POST /api/v1/utxos/shielded"
+    );
+
     let viewing_key = parse_hex_32(&req.viewing_key).map_err(|e| {
+        warn!(error = %e, "invalid viewing key");
         (
             StatusCode::BAD_REQUEST,
             Json(ApiError { error: e }),
@@ -207,6 +216,7 @@ async fn query_shielded_utxos<D: UtxoDecryptor>(
         });
     }
 
+    debug!(results = utxos.len(), tip_slot, "shielded query complete");
     Ok(Json(ShieldedUtxoResponse { utxos, tip_slot }))
 }
 
@@ -214,12 +224,15 @@ async fn query_unshielded_utxos<D: UtxoDecryptor>(
     State(state): State<Arc<ApiState<D>>>,
     axum::extract::Query(query): axum::extract::Query<UnshieldedQuery>,
 ) -> Result<Json<UnshieldedUtxoResponse>, (StatusCode, Json<ApiError>)> {
+    info!(owner = ?query.owner, "GET /api/v1/utxos/unshielded");
+
     let owner_filter = query
         .owner
         .as_deref()
         .map(parse_hex_32)
         .transpose()
         .map_err(|e| {
+            warn!(error = %e, "invalid owner hex");
             (
                 StatusCode::BAD_REQUEST,
                 Json(ApiError { error: e }),
@@ -278,12 +291,15 @@ async fn query_unshielded_utxos<D: UtxoDecryptor>(
         });
     }
 
+    debug!(results = utxos.len(), tip_slot, "unshielded query complete");
     Ok(Json(UnshieldedUtxoResponse { utxos, tip_slot }))
 }
 
 async fn get_status<D: UtxoDecryptor>(
     State(state): State<Arc<ApiState<D>>>,
 ) -> Json<StatusResponse> {
+    debug!("GET /api/v1/status");
+
     let cursor = state.domain.state.read_cursor().ok().flatten();
 
     let (tip_slot, tip_hash) = match cursor {

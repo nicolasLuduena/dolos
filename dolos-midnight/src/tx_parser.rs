@@ -68,13 +68,15 @@ pub struct ParsedBlock {
 }
 
 // ---------------------------------------------------------------------------
-// ExtrinsicParser trait — Front 1 implements this
+// ExtrinsicParser trait
 // ---------------------------------------------------------------------------
 
-/// Parses raw substrate extrinsics into structured Midnight transactions.
+/// Parses pre-extracted midnight transaction bytes into structured data.
 ///
-/// Front 1 provides `SubxtParser` (real implementation using subxt codegen +
-/// midnight-ledger for tagged deserialization of v7/v8 transactions).
+/// The `SubxtBlockSource` has already decoded the SCALE extrinsic envelope
+/// and extracted the raw midnight tx payloads. The parser uses
+/// `midnight_serialize::tagged_deserialize` to parse them into ledger types
+/// and extract shielded outputs, inputs, and hashes.
 pub trait ExtrinsicParser: Send + Sync + 'static {
     fn parse_block(&self, block: &RawSubstrateBlock) -> Result<ParsedBlock, MidnightError>;
 }
@@ -87,7 +89,6 @@ pub struct MockParser;
 
 impl ExtrinsicParser for MockParser {
     fn parse_block(&self, block: &RawSubstrateBlock) -> Result<ParsedBlock, MidnightError> {
-        // Phase 0: return empty parsed block (no transactions extracted)
         Ok(ParsedBlock {
             slot: block.number,
             hash: block.hash,
@@ -96,3 +97,214 @@ impl ExtrinsicParser for MockParser {
         })
     }
 }
+
+// ---------------------------------------------------------------------------
+// SubxtParser — real implementation (behind subxt-sync feature)
+//
+// Uses midnight-ledger types to parse the already-extracted midnight tx bytes.
+// The extrinsic SCALE decoding was done in SubxtBlockSource during sync;
+// here we only need midnight_serialize::tagged_deserialize.
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "subxt-sync")]
+mod real_parser {
+    use midnight_serialize::Serializable;
+    use midnight_storage_core::db::InMemoryDB;
+    use tracing::{debug, warn};
+
+    use crate::block_source::TxKind;
+
+    use super::*;
+
+    /// Erased transaction type — no signatures/proofs needed for read-only parsing.
+    type ErasedTransaction = midnight_ledger::structure::Transaction<
+        (),
+        (),
+        midnight_transient_crypto::commitment::Pedersen,
+        InMemoryDB,
+    >;
+
+    pub struct SubxtParser;
+
+    impl ExtrinsicParser for SubxtParser {
+        fn parse_block(&self, block: &RawSubstrateBlock) -> Result<ParsedBlock, MidnightError> {
+            let mut transactions = Vec::new();
+
+            for (idx, raw_tx) in block.midnight_txs.iter().enumerate() {
+                match raw_tx.kind {
+                    TxKind::Regular => match parse_regular_tx(&raw_tx.raw, idx) {
+                        Ok(tx) => transactions.push(tx),
+                        Err(e) => {
+                            warn!(
+                                block = block.number,
+                                tx_idx = idx,
+                                error = %e,
+                                "failed to parse regular tx, skipping"
+                            );
+                        }
+                    },
+                    TxKind::System => match parse_system_tx(&raw_tx.raw, idx) {
+                        Ok(tx) => transactions.push(tx),
+                        Err(e) => {
+                            warn!(
+                                block = block.number,
+                                tx_idx = idx,
+                                error = %e,
+                                "failed to parse system tx, skipping"
+                            );
+                        }
+                    },
+                }
+            }
+
+            debug!(
+                block = block.number,
+                tx_count = transactions.len(),
+                "parsed block"
+            );
+
+            Ok(ParsedBlock {
+                slot: block.number,
+                hash: block.hash,
+                timestamp: block.timestamp,
+                transactions,
+            })
+        }
+    }
+
+    /// Parse a regular Midnight transaction using tagged_deserialize.
+    fn parse_regular_tx(
+        raw_tx: &[u8],
+        tx_idx: usize,
+    ) -> Result<ParsedTransaction, MidnightError> {
+        let tx: ErasedTransaction =
+            midnight_serialize::tagged_deserialize(&mut &raw_tx[..]).map_err(|e| {
+                MidnightError::Decode(format!("tx {tx_idx}: tagged_deserialize failed: {e}"))
+            })?;
+
+        let tx_hash = tx.transaction_hash().0 .0;
+
+        let mut shielded_outputs = Vec::new();
+        let mut shielded_inputs = Vec::new();
+        let mut output_idx: u32 = 0;
+
+        match &tx {
+            midnight_ledger::structure::Transaction::Standard(std_tx) => {
+                // Extract from guaranteed_coins offer
+                if let Some(offer) = &std_tx.guaranteed_coins {
+                    extract_offer_outputs(offer, &mut shielded_outputs, &mut output_idx);
+                    extract_offer_inputs(offer, &mut shielded_inputs);
+                }
+
+                // Extract from fallible_coins offers
+                for offer in std_tx.fallible_coins.values() {
+                    extract_offer_outputs(&offer, &mut shielded_outputs, &mut output_idx);
+                    extract_offer_inputs(&offer, &mut shielded_inputs);
+                }
+            }
+            midnight_ledger::structure::Transaction::ClaimRewards(_) => {
+                // ClaimRewards doesn't produce shielded outputs
+            }
+        }
+
+        Ok(ParsedTransaction {
+            tx_hash,
+            tx_type: TxType::Regular,
+            shielded_outputs,
+            shielded_inputs,
+            unshielded_outputs: Vec::new(),
+            unshielded_inputs: Vec::new(),
+            raw: raw_tx.to_vec(),
+        })
+    }
+
+    /// Parse a system transaction — just extract the hash.
+    fn parse_system_tx(
+        raw_tx: &[u8],
+        _tx_idx: usize,
+    ) -> Result<ParsedTransaction, MidnightError> {
+        let sys_tx: midnight_ledger::structure::SystemTransaction =
+            midnight_serialize::tagged_deserialize(&mut &raw_tx[..]).map_err(|e| {
+                MidnightError::Decode(format!("system tx tagged_deserialize failed: {e}"))
+            })?;
+
+        let tx_hash = sys_tx.transaction_hash().0 .0;
+
+        Ok(ParsedTransaction {
+            tx_hash,
+            tx_type: TxType::System,
+            shielded_outputs: Vec::new(),
+            shielded_inputs: Vec::new(),
+            unshielded_outputs: Vec::new(),
+            unshielded_inputs: Vec::new(),
+            raw: raw_tx.to_vec(),
+        })
+    }
+
+    /// Extract shielded outputs (with ciphertexts) from a ZswapOffer.
+    fn extract_offer_outputs(
+        offer: &midnight_zswap::Offer<(), InMemoryDB>,
+        out: &mut Vec<ShieldedOutput>,
+        idx: &mut u32,
+    ) {
+        for output in offer.outputs.iter_deref() {
+            let ciphertexts = match &output.ciphertext {
+                Some(ct) => {
+                    let mut buf = Vec::new();
+                    if ct.serialize(&mut buf).is_ok() {
+                        vec![buf]
+                    } else {
+                        Vec::new()
+                    }
+                }
+                None => Vec::new(),
+            };
+
+            out.push(ShieldedOutput {
+                output_index: *idx,
+                ciphertexts,
+                raw_coin: Vec::new(),
+                ledger_version: 8,
+            });
+            *idx += 1;
+        }
+
+        // Transient coins also carry ciphertexts
+        for transient in offer.transient.iter_deref() {
+            let ciphertexts = match &transient.ciphertext {
+                Some(ct) => {
+                    let mut buf = Vec::new();
+                    if ct.serialize(&mut buf).is_ok() {
+                        vec![buf]
+                    } else {
+                        Vec::new()
+                    }
+                }
+                None => Vec::new(),
+            };
+
+            out.push(ShieldedOutput {
+                output_index: *idx,
+                ciphertexts,
+                raw_coin: Vec::new(),
+                ledger_version: 8,
+            });
+            *idx += 1;
+        }
+    }
+
+    /// Extract shielded inputs (nullifiers) from a ZswapOffer.
+    fn extract_offer_inputs(
+        offer: &midnight_zswap::Offer<(), InMemoryDB>,
+        out: &mut Vec<ShieldedInput>,
+    ) {
+        for input in offer.inputs.iter_deref() {
+            out.push(ShieldedInput {
+                nullifier: input.nullifier.0 .0,
+            });
+        }
+    }
+}
+
+#[cfg(feature = "subxt-sync")]
+pub use real_parser::SubxtParser;

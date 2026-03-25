@@ -23,7 +23,10 @@ mod work;
 
 use chain::{MidnightChainConfig, MidnightGenesis, MidnightLogic};
 use config::MidnightConfig;
+#[cfg(not(feature = "midnight-crypto"))]
 use decrypt::MockDecryptor;
+#[cfg(feature = "midnight-crypto")]
+use decrypt::RealDecryptor;
 use domain::{MidnightDomain, StubMempool};
 
 // ---------------------------------------------------------------------------
@@ -81,10 +84,17 @@ async fn run_daemon(config_path: &str) -> Result<(), Box<dyn std::error::Error>>
     let config_contents = std::fs::read_to_string(config_path)?;
     let config: MidnightConfig = toml::from_str(&config_contents)?;
 
-    info!(ws_url = %config.node.ws_url, "starting daemon");
+    info!(
+        ws_url = %config.node.ws_url,
+        storage_path = ?config.storage.path,
+        api_listen = %config.api.listen_address,
+        "starting daemon"
+    );
 
     // Open storage
+    info!(path = ?config.storage.path, "opening storage");
     let (wal, state, archive, indexes) = storage_init::open_stores(&config.storage.path)?;
+    info!("storage opened successfully");
 
     // Initialize chain logic
     let genesis = MidnightGenesis {
@@ -92,11 +102,27 @@ async fn run_daemon(config_path: &str) -> Result<(), Box<dyn std::error::Error>>
         network_name: "midnight".to_string(),
     };
 
-    let chain = MidnightLogic::initialize::<MidnightDomain>(
+    info!("initializing chain logic");
+    #[allow(unused_mut)]
+    let mut chain = MidnightLogic::initialize::<MidnightDomain>(
         MidnightChainConfig,
         &state,
         genesis.clone(),
     )?;
+
+    // Inject real parser when subxt-sync feature is enabled
+    #[cfg(feature = "subxt-sync")]
+    {
+        info!("using SubxtParser (real midnight-ledger tx parsing)");
+        chain.set_parser(std::sync::Arc::new(tx_parser::SubxtParser));
+    }
+    #[cfg(not(feature = "subxt-sync"))]
+    info!("using MockParser (no real tx parsing — enable subxt-sync feature)");
+
+    #[cfg(feature = "midnight-crypto")]
+    info!("using RealDecryptor (midnight-crypto enabled)");
+    #[cfg(not(feature = "midnight-crypto"))]
+    info!("using MockDecryptor (trial decryption disabled — enable midnight-crypto feature)");
 
     let (tip_broadcast, _) = tokio::sync::broadcast::channel::<TipEvent>(100);
 
@@ -119,7 +145,10 @@ async fn run_daemon(config_path: &str) -> Result<(), Box<dyn std::error::Error>>
     };
 
     // Build API router
+    #[cfg(not(feature = "midnight-crypto"))]
     let decryptor = MockDecryptor;
+    #[cfg(feature = "midnight-crypto")]
+    let decryptor = RealDecryptor;
     let app = api::router(domain.clone(), decryptor);
 
     // Spawn sync loop + API server concurrently

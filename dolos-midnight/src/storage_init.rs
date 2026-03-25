@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use dolos_core::config::{RedbArchiveConfig, RedbIndexConfig, RedbStateConfig, RedbWalConfig};
+use tracing::info;
 
 use crate::chain::MidnightError;
 use crate::model::{self, MidnightDelta};
@@ -28,17 +29,21 @@ pub fn open_stores(
     let schema = model::build_schema();
 
     let wal_path = base_path.join("wal");
+    info!(path = ?wal_path, "opening WAL store");
     let wal = dolos_redb3::wal::RedbWalStore::open(&wal_path, &RedbWalConfig::default())?;
 
     let state_path = base_path.join("state");
+    info!(path = ?state_path, "opening state store");
     let state =
         dolos_redb3::state::StateStore::open(schema.clone(), &state_path, &RedbStateConfig::default())?;
 
     let archive_path = base_path.join("chain");
+    info!(path = ?archive_path, "opening archive store");
     let archive =
         dolos_redb3::archive::ArchiveStore::open(schema, &archive_path, &RedbArchiveConfig::default())?;
 
     let index_path = base_path.join("index");
+    info!(path = ?index_path, "opening index store");
     let indexes = dolos_redb3::indexes::IndexStore::open(&index_path, &RedbIndexConfig::default())?;
 
     Ok((wal, state, archive, indexes))

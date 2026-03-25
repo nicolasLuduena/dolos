@@ -32,9 +32,21 @@ toml = "0.8"
 tokio-stream = "0.1"
 async-stream = "0.3"
 
-# Optional: real Substrate node sync
+# Optional: real Substrate node sync + extrinsic parsing
 subxt = { version = "0.44", features = ["reconnecting-rpc-client"], optional = true }
+parity-scale-codec = { version = "3.7", optional = true }
+
+# Optional: midnight ledger for real tx parsing (behind subxt-sync)
+midnight-ledger = { path = "../../midnight-ledger/ledger", optional = true }
+midnight-zswap = { path = "../../midnight-ledger/zswap", optional = true }
+midnight-storage-core = { path = "../../midnight-ledger/storage-core", package = "midnight-storage-core", optional = true }
+
+# Optional: midnight crypto for viewing key trial decryption
+midnight-transient-crypto = { path = "../../midnight-ledger/transient-crypto", optional = true }
+midnight-coin-structure = { path = "../../midnight-ledger/coin-structure", optional = true }
+midnight-serialize = { path = "../../midnight-ledger/serialize", optional = true }
 
 [features]
 default = []
-subxt-sync = ["subxt"]
+subxt-sync = ["subxt", "parity-scale-codec", "midnight-ledger", "midnight-zswap", "midnight-serialize", "midnight-storage-core", "midnight-transient-crypto"]
+midnight-crypto = ["midnight-transient-crypto", "midnight-coin-structure", "midnight-serialize"]

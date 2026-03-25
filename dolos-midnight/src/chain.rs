@@ -5,6 +5,7 @@ use dolos_core::{
     mempool, Block, BlockSlot, ChainError, ChainLogic, ChainPoint, Cbor, Domain, EraCbor,
     Genesis, RawBlock, RawUtxoMap, TxOrder, TxoRef, UndoBlockData,
 };
+use tracing::{debug, info};
 
 use crate::model::{MidnightDelta, MidnightEntity};
 use crate::work::{MidnightWorkBuffer, MidnightWorkUnit};
@@ -91,6 +92,14 @@ impl Block for MidnightBlock {
 pub struct MidnightLogic {
     _config: MidnightChainConfig,
     work_buffer: MidnightWorkBuffer,
+    parser: std::sync::Arc<dyn crate::tx_parser::ExtrinsicParser>,
+}
+
+impl MidnightLogic {
+    /// Replace the extrinsic parser (e.g. swap MockParser for SubxtParser).
+    pub fn set_parser(&mut self, parser: std::sync::Arc<dyn crate::tx_parser::ExtrinsicParser>) {
+        self.parser = parser;
+    }
 }
 
 impl ChainLogic for MidnightLogic {
@@ -117,14 +126,21 @@ impl ChainLogic for MidnightLogic {
 
         let cursor = state.read_cursor().map_err(ChainError::StateError)?;
 
-        let work_buffer = match cursor {
-            Some(point) => MidnightWorkBuffer::Synced(point),
-            None => MidnightWorkBuffer::Empty,
+        let work_buffer = match &cursor {
+            Some(point) => {
+                info!(cursor = ?point, "chain logic initialized (resuming)");
+                MidnightWorkBuffer::Synced(point.clone())
+            }
+            None => {
+                info!("chain logic initialized (fresh start, no cursor)");
+                MidnightWorkBuffer::Empty
+            }
         };
 
         Ok(Self {
             _config: config,
             work_buffer,
+            parser: std::sync::Arc::new(crate::tx_parser::MockParser),
         })
     }
 
@@ -152,6 +168,16 @@ impl ChainLogic for MidnightLogic {
             })?;
 
         let slot = substrate_block.number;
+        let hash_prefix = hex::encode(&substrate_block.hash[..4]);
+        let tx_count = substrate_block.midnight_txs.len();
+
+        debug!(
+            slot,
+            hash = %hash_prefix,
+            midnight_txs = tx_count,
+            raw_bytes = raw.len(),
+            "receive_block"
+        );
 
         let block = MidnightBlock {
             number: substrate_block.number,
@@ -182,7 +208,7 @@ impl ChainLogic for MidnightLogic {
                 let point = block.point();
                 self.work_buffer = MidnightWorkBuffer::Synced(point);
                 Some(MidnightWorkUnit::Roll(Box::new(
-                    crate::work::RollWorkUnit::new(block),
+                    crate::work::RollWorkUnit::new(block, self.parser.clone()),
                 )))
             }
         }
