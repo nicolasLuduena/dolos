@@ -274,8 +274,15 @@ where
         let intersect = inner_req
             .intersect
             .iter()
-            .map(|x| ChainPoint::Specific(x.slot, x.hash.to_vec().as_slice().into()))
-            .collect::<Vec<ChainPoint>>();
+            .map(|x| {
+                let arr: [u8; 32] = x
+                    .hash
+                    .as_ref()
+                    .try_into()
+                    .map_err(|_| Status::invalid_argument("malformed intersect hash"))?;
+                Ok(ChainPoint::Specific(x.slot, dolos_core::hash::Hash::new(arr)))
+            })
+            .collect::<Result<Vec<ChainPoint>, Status>>()?;
 
         let stream =
             ChainStream::start::<D, _>(self.domain.clone(), intersect, self.cancel.clone());

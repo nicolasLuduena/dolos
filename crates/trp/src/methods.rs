@@ -13,13 +13,14 @@ use tx3_resolver::trp::{
     TxStatus, TxWitness,
 };
 
+use dolos_cardano::{CardanoError, CardanoGenesis};
 use dolos_core::{Domain, MempoolAwareUtxoStore, MempoolStore as _, StateStore as _, SubmitExt};
 
 use crate::{compiler::load_compiler, utxos::UtxoStoreAdapter};
 
 use super::{Context, Error};
 
-pub async fn trp_resolve<D: Domain>(
+pub async fn trp_resolve<D: Domain<Genesis = CardanoGenesis, ChainSpecificError = CardanoError>>(
     params: Params<'_>,
     context: Arc<Context<D>>,
 ) -> Result<TxEnvelope, Error> {
@@ -96,7 +97,7 @@ fn apply_witnesses(original: &[u8], witnesses: &[TxWitness]) -> Result<Vec<u8>, 
     Ok(pallas::codec::minicbor::to_vec(&tx).unwrap())
 }
 
-pub async fn trp_submit<D: Domain + SubmitExt>(
+pub async fn trp_submit<D: Domain<ChainSpecificError = CardanoError> + SubmitExt>(
     params: Params<'_>,
     context: Arc<Context<D>>,
 ) -> Result<SubmitResponse, Error> {
@@ -641,7 +642,8 @@ mod tests {
 
         // 4. Verify the tx is in the mempool as pending
         let tx_hash_bytes = hex::decode(&response.hash).unwrap();
-        let tx_hash: pallas::crypto::hash::Hash<32> = tx_hash_bytes.as_slice().into();
+        let tx_hash =
+            dolos_core::hash::Hash::<32>::new(tx_hash_bytes.as_slice().try_into().unwrap());
         let status = MempoolStore::check_status(context.domain.mempool(), &tx_hash);
         assert_eq!(status.stage, MempoolTxStage::Pending);
     }

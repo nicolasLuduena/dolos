@@ -1,3 +1,4 @@
+use dolos_cardano::pallas_hash_to_core;
 use dolos_core::config::RootConfig;
 use miette::{Context, IntoDiagnostic};
 use pallas::crypto::hash::Hash;
@@ -25,7 +26,7 @@ pub fn run(config: &RootConfig, args: &Args) -> miette::Result<()> {
         .into_diagnostic()
         .context("error parsing hash")?;
 
-    let point = ChainPoint::Specific(args.slot, hash);
+    let point = ChainPoint::Specific(args.slot, pallas_hash_to_core(hash));
 
     let seq = wal
         .find_intersect(&[point])

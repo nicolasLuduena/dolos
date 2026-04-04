@@ -8,10 +8,12 @@
 
 use std::sync::Arc;
 
-use dolos_core::{config::CardanoConfig, BlockSlot, Domain, DomainError, Genesis, WorkUnit};
+use dolos_core::{config::CardanoConfig, BlockSlot, DomainError, WorkUnit};
+
+use crate::CardanoDomain;
 use tracing::{debug, info};
 
-use crate::CardanoLogic;
+use crate::CardanoGenesis;
 
 use super::BoundaryWork;
 
@@ -20,7 +22,7 @@ pub struct EwrapWorkUnit {
     slot: BlockSlot,
     #[allow(dead_code)]
     config: CardanoConfig,
-    genesis: Arc<Genesis>,
+    genesis: Arc<CardanoGenesis>,
 
     // Loaded
     boundary: Option<BoundaryWork>,
@@ -29,7 +31,7 @@ pub struct EwrapWorkUnit {
 impl EwrapWorkUnit {
     /// Create a new ewrap work unit.
     /// Rewards are loaded from state store during load phase.
-    pub fn new(slot: BlockSlot, config: CardanoConfig, genesis: Arc<Genesis>) -> Self {
+    pub fn new(slot: BlockSlot, config: CardanoConfig, genesis: Arc<CardanoGenesis>) -> Self {
         Self {
             slot,
             config,
@@ -44,15 +46,12 @@ impl EwrapWorkUnit {
     }
 }
 
-impl<D> WorkUnit<D> for EwrapWorkUnit
-where
-    D: Domain<Chain = CardanoLogic>,
-{
+impl<D: CardanoDomain> WorkUnit<D> for EwrapWorkUnit {
     fn name(&self) -> &'static str {
         "ewrap"
     }
 
-    fn load(&mut self, domain: &D) -> Result<(), DomainError> {
+    fn load(&mut self, domain: &D) -> Result<(), DomainError<D::ChainSpecificError>> {
         debug!(slot = self.slot, "loading ewrap boundary context");
 
         // Load rewards from state store (persisted by RUPD)
@@ -66,19 +65,20 @@ where
         Ok(())
     }
 
-    fn compute(&mut self) -> Result<(), DomainError> {
+    fn compute(&mut self) -> Result<(), DomainError<D::ChainSpecificError>> {
         // Computation is done during load via compute_deltas
         // This is because the visitor pattern needs access to state
         debug!("ewrap compute phase (deltas already computed during load)");
         Ok(())
     }
 
-    fn commit_state(&mut self, domain: &D) -> Result<(), DomainError> {
+    fn commit_state(&mut self, domain: &D) -> Result<(), DomainError<D::ChainSpecificError>> {
         debug!(slot = self.slot, "committing ewrap state changes");
 
-        let boundary = self.boundary.as_mut().ok_or_else(|| {
-            DomainError::Internal("ewrap boundary not loaded".into())
-        })?;
+        let boundary = self
+            .boundary
+            .as_mut()
+            .ok_or_else(|| DomainError::Internal("ewrap boundary not loaded".into()))?;
 
         boundary.commit::<D>(domain.state(), domain.archive())?;
 
@@ -86,7 +86,7 @@ where
         Ok(())
     }
 
-    fn commit_archive(&mut self, _domain: &D) -> Result<(), DomainError> {
+    fn commit_archive(&mut self, _domain: &D) -> Result<(), DomainError<D::ChainSpecificError>> {
         // Archive writes are done in commit_state via boundary.commit()
         // because they're interleaved with state commits
         Ok(())

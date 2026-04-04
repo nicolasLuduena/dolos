@@ -201,8 +201,10 @@ impl CardanoIndexDeltaBuilder {
 
     /// Add a spent TxO reference to the current block.
     pub fn add_spent_input(&mut self, input: &MultiEraInput) {
-        let txo_ref: TxoRef = input.into();
-        let bytes: Vec<u8> = txo_ref.into();
+        let txo_ref = crate::txo_ref_from_input(input);
+        let mut bytes = [0u8; 36];
+        bytes[0..32].copy_from_slice(txo_ref.0.as_slice());
+        bytes[32..36].copy_from_slice(&txo_ref.1.to_be_bytes());
         self.current_block()
             .tags
             .push(Tag::new(archive::SPENT_TXO, bytes));
@@ -273,7 +275,7 @@ impl CardanoIndexDeltaBuilder {
             for input in tx.inputs() {
                 self.add_spent_input(&input);
 
-                let txo_ref: TxoRef = (&input).into();
+                let txo_ref = crate::txo_ref_from_input(&input);
                 if let Some(resolved) = resolved_inputs.get(&txo_ref) {
                     resolved.with_dependent(|_, output| {
                         if let Ok(addr) = output.address() {
@@ -383,7 +385,7 @@ impl CardanoIndexDeltaBuilder {
 
     /// Extract UTxO filter tags from raw EraCbor.
     fn extract_tags_from_era_cbor(era_cbor: &EraCbor) -> Option<Vec<Tag>> {
-        let output = MultiEraOutput::try_from(era_cbor).ok()?;
+        let output = crate::multi_era_output_from_era_cbor(era_cbor).ok()?;
         Some(Self::extract_utxo_tags(&output))
     }
 }
@@ -402,8 +404,7 @@ pub fn index_delta_from_utxo_delta(cursor: ChainPoint, utxo_delta: &UtxoSetDelta
 #[cfg(test)]
 mod tests {
     use super::*;
-    use dolos_core::ChainPoint;
-    use pallas::crypto::hash::Hash;
+    use dolos_core::{hash::Hash, ChainPoint};
     use pallas::ledger::addresses::{
         Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart,
     };

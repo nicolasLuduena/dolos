@@ -165,7 +165,9 @@ fn define_starting_point(
     use dolos_core::StateStore;
 
     if let Some(point) = &args.start_from {
-        Ok(point.clone().try_into().unwrap())
+        chain_point_to_pallas(point.clone())
+            .into_diagnostic()
+            .context("converting start-from point")
     } else {
         let cursor = state
             .read_cursor()
@@ -173,7 +175,9 @@ fn define_starting_point(
             .context("reading state cursor")?;
 
         let point = cursor
-            .map(|c| c.try_into().unwrap())
+            .map(|c| chain_point_to_pallas(c).into_diagnostic())
+            .transpose()
+            .context("converting cursor to pallas point")?
             .unwrap_or(pallas::network::miniprotocols::Point::Origin);
 
         Ok(point)

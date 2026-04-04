@@ -5,9 +5,11 @@
 //! in memory.
 
 use dolos_core::{
-    ArchiveStore, ArchiveWriter, BlockSlot, BrokenInvariant, ChainError, ChainPoint, Domain,
-    Entity, EntityDelta as _, EntityKey, LogKey, NsKey, StateStore, StateWriter, TemporalKey,
+    ArchiveStore, ArchiveWriter, BlockSlot, BrokenInvariant, ChainError, ChainPoint, Entity,
+    EntityDelta as _, EntityKey, LogKey, NsKey, StateStore, StateWriter, TemporalKey,
 };
+
+use crate::CardanoDomain;
 use tracing::{debug, instrument, trace, warn};
 
 use crate::{
@@ -31,7 +33,7 @@ impl super::WorkContext {
     fn collect_era_transition(
         &self,
         state: &impl StateStore,
-    ) -> Result<Option<EraTransitionData>, ChainError> {
+    ) -> Result<Option<EraTransitionData>, ChainError<crate::CardanoError>> {
         let Some(transition) = self.ended_state().pparams.era_transition() else {
             return Ok(None);
         };
@@ -75,9 +77,9 @@ impl super::WorkContext {
         &mut self,
         state: &D::State,
         writer: &<D::State as StateStore>::Writer,
-    ) -> Result<(), ChainError>
+    ) -> Result<(), ChainError<crate::CardanoError>>
     where
-        D: Domain,
+        D: CardanoDomain,
         E: Entity + FixedNamespace + Into<CardanoEntity>,
     {
         let records = state.iter_entities_typed::<E>(E::NS, None)?;
@@ -109,12 +111,12 @@ impl super::WorkContext {
     }
 
     #[instrument(skip_all)]
-    pub fn commit<D: Domain>(
+    pub fn commit<D: CardanoDomain>(
         &mut self,
         state: &D::State,
         archive: &D::Archive,
         slot: BlockSlot,
-    ) -> Result<(), ChainError> {
+    ) -> Result<(), ChainError<crate::CardanoError>> {
         debug!("committing estart changes");
 
         // Collect era transition data first (only 1-2 entities, not a memory concern)

@@ -1,5 +1,4 @@
 use dolos_core::crawl::ChainCrawler;
-use itertools::*;
 use pallas::network::miniprotocols::{
     chainsync::{BlockContent, ClientRequest, N2CServer, Tip},
     Point,
@@ -33,7 +32,7 @@ impl<D: Domain> Session<D> {
             .map(|(point, _)| point)
             .unwrap_or(ChainPoint::Origin);
 
-        let point = Point::try_from(point).map_err(|_| Error::custom("invalid point"))?;
+        let point = chain_point_to_pallas(point).map_err(|_| Error::custom("invalid point"))?;
 
         Ok(Tip(point, 0))
     }
@@ -45,7 +44,7 @@ impl<D: Domain> Session<D> {
 
         let tip = self.prepare_tip()?;
 
-        let point = Point::try_from(point).map_err(|_| Error::custom("invalid point"))?;
+        let point = chain_point_to_pallas(point).map_err(|_| Error::custom("invalid point"))?;
 
         self.connection
             .send_intersect_found(point, tip)
@@ -77,7 +76,7 @@ impl<D: Domain> Session<D> {
 
         let tip = self.prepare_tip()?;
 
-        let point = Point::try_from(point).map_err(|_| Error::custom("invalid point"))?;
+        let point = chain_point_to_pallas(point).map_err(|_| Error::custom("invalid point"))?;
 
         // Ouroboros chain-sync always starts by sending the intersection point as an
         // initial rollback event. The `is_new_intersection`` flag allows us to track if
@@ -104,7 +103,7 @@ impl<D: Domain> Session<D> {
 
         let tip = self.prepare_tip()?;
 
-        let point = Point::try_from(point).map_err(|_| Error::custom("invalid point"))?;
+        let point = chain_point_to_pallas(point).map_err(|_| Error::custom("invalid point"))?;
 
         self.connection
             .send_roll_backward(point, tip)
@@ -149,7 +148,10 @@ impl<D: Domain> Session<D> {
             points.push(Point::Origin);
         }
 
-        let points = points.into_iter().map(From::from).collect_vec();
+        let points: Vec<_> = points
+            .into_iter()
+            .filter_map(|p| pallas_point_to_chain(p).ok())
+            .collect();
 
         let intersect = ChainCrawler::<D>::start(&self.domain, &points).unwrap();
 

@@ -9,10 +9,12 @@
 
 use std::sync::Arc;
 
-use dolos_core::{config::CardanoConfig, BlockSlot, Domain, DomainError, Genesis, WorkUnit};
+use dolos_core::{config::CardanoConfig, BlockSlot, DomainError, WorkUnit};
+
+use crate::CardanoDomain;
 use tracing::{debug, info};
 
-use crate::CardanoLogic;
+use crate::CardanoGenesis;
 
 use super::WorkContext;
 
@@ -21,7 +23,7 @@ pub struct EstartWorkUnit {
     slot: BlockSlot,
     #[allow(dead_code)]
     config: CardanoConfig,
-    genesis: Arc<Genesis>,
+    genesis: Arc<CardanoGenesis>,
 
     // Loaded
     context: Option<WorkContext>,
@@ -29,7 +31,7 @@ pub struct EstartWorkUnit {
 
 impl EstartWorkUnit {
     /// Create a new estart work unit.
-    pub fn new(slot: BlockSlot, config: CardanoConfig, genesis: Arc<Genesis>) -> Self {
+    pub fn new(slot: BlockSlot, config: CardanoConfig, genesis: Arc<CardanoGenesis>) -> Self {
         Self {
             slot,
             config,
@@ -44,15 +46,12 @@ impl EstartWorkUnit {
     }
 }
 
-impl<D> WorkUnit<D> for EstartWorkUnit
-where
-    D: Domain<Chain = CardanoLogic>,
-{
+impl<D: CardanoDomain> WorkUnit<D> for EstartWorkUnit {
     fn name(&self) -> &'static str {
         "estart"
     }
 
-    fn load(&mut self, domain: &D) -> Result<(), DomainError> {
+    fn load(&mut self, domain: &D) -> Result<(), DomainError<D::ChainSpecificError>> {
         debug!(slot = self.slot, "loading estart work context");
 
         let context = WorkContext::load::<D>(domain.state(), self.genesis.clone())?;
@@ -66,18 +65,19 @@ where
         Ok(())
     }
 
-    fn compute(&mut self) -> Result<(), DomainError> {
+    fn compute(&mut self) -> Result<(), DomainError<D::ChainSpecificError>> {
         // Computation is done during load via the visitor pattern
         debug!("estart compute phase (deltas already computed during load)");
         Ok(())
     }
 
-    fn commit_state(&mut self, domain: &D) -> Result<(), DomainError> {
+    fn commit_state(&mut self, domain: &D) -> Result<(), DomainError<D::ChainSpecificError>> {
         debug!(slot = self.slot, "committing estart state changes");
 
-        let context = self.context.as_mut().ok_or_else(|| {
-            DomainError::Internal("estart context not loaded".into())
-        })?;
+        let context = self
+            .context
+            .as_mut()
+            .ok_or_else(|| DomainError::Internal("estart context not loaded".into()))?;
 
         context.commit::<D>(domain.state(), domain.archive(), self.slot)?;
 
@@ -85,7 +85,7 @@ where
         Ok(())
     }
 
-    fn commit_archive(&mut self, _domain: &D) -> Result<(), DomainError> {
+    fn commit_archive(&mut self, _domain: &D) -> Result<(), DomainError<D::ChainSpecificError>> {
         // Archive writes are done in commit_state via context.commit()
         Ok(())
     }
