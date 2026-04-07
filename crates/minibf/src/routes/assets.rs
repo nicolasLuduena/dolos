@@ -16,9 +16,9 @@ use dolos_cardano::{
     cip68::{cip_68_reference_asset, encode_to_hex, parse_cip68_metadata_map, Cip68TokenStandard},
     indexes::{AsyncCardanoQueryExt, CardanoIndexExt, SlotOrder},
     model::AssetState,
-    ChainSummary,
+    pallas_hash_to_core, CardanoError, ChainSummary,
 };
-use dolos_core::{BlockSlot, Domain, EraCbor, IndexStore as _, StateStore as _};
+use dolos_core::{BlockSlot, Domain, TaggedPayload, IndexStore as _, StateStore as _};
 use futures_util::StreamExt;
 use itertools::Itertools;
 use pallas::{
@@ -226,7 +226,7 @@ async fn datum_from_hash<D>(
     hash: Hash<32>,
 ) -> Result<Option<PlutusData>, StatusCode>
 where
-    D: Domain + Clone + Send + Sync + 'static,
+    D: Domain<ChainSpecificError = CardanoError> + Clone + Send + Sync + 'static,
 {
     let Some(bytes) = domain
         .query()
@@ -265,7 +265,7 @@ async fn metadata_from_datum_option<D>(
     standard: Cip68TokenStandard,
 ) -> Result<Option<OnchainMetadata>, StatusCode>
 where
-    D: Domain + Clone + Send + Sync + 'static,
+    D: Domain<ChainSpecificError = CardanoError> + Clone + Send + Sync + 'static,
 {
     match datum_option {
         pallas::ledger::primitives::conway::DatumOption::Hash(hash) => {
@@ -287,7 +287,7 @@ async fn last_cip68_metadata_from_tx<D>(
     standard: Cip68TokenStandard,
 ) -> Result<Option<OnchainMetadata>, StatusCode>
 where
-    D: Domain + Clone + Send + Sync + 'static,
+    D: Domain<ChainSpecificError = CardanoError> + Clone + Send + Sync + 'static,
 {
     let mut last_metadata = None;
 
@@ -310,7 +310,7 @@ struct AssetModelBuilder {
     subject: Vec<u8>,
     unit: String,
     asset_state: dolos_cardano::model::AssetState,
-    initial_tx: Option<EraCbor>,
+    initial_tx: Option<TaggedPayload>,
     registry_url: Option<String>,
 }
 
@@ -320,7 +320,7 @@ impl AssetModelBuilder {
         domain: &Facade<D>,
     ) -> Result<Option<OnchainMetadata>, StatusCode>
     where
-        D: Domain + Clone + Send + Sync + 'static,
+        D: Domain<ChainSpecificError = CardanoError> + Clone + Send + Sync + 'static,
         Option<AssetState>: From<D::Entity>,
     {
         let cip68_reference = match cip68_reference_from_unit(&self.unit)? {
@@ -337,9 +337,9 @@ impl AssetModelBuilder {
             let ref_state = domain.read_cardano_entity::<AssetState>(entity_key.as_slice())?;
 
             if let Some(metadata_tx) = ref_state.and_then(|state| state.metadata_tx) {
-                if let Some(EraCbor(era, cbor)) = domain
+                if let Some(TaggedPayload(era, cbor)) = domain
                     .query()
-                    .tx_cbor(metadata_tx.as_slice().to_vec())
+                    .tx_cbor(pallas_hash_to_core(metadata_tx))
                     .await
                     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
                 {
@@ -358,7 +358,7 @@ impl AssetModelBuilder {
             if Some(metadata_tx) != self.asset_state.initial_tx {
                 let metadata_cbor = domain
                     .query()
-                    .tx_cbor(metadata_tx.as_slice().to_vec())
+                    .tx_cbor(pallas_hash_to_core(metadata_tx))
                     .await
                     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
                 if metadata_cbor.is_some() {
@@ -367,8 +367,8 @@ impl AssetModelBuilder {
             }
         }
 
-        if let Some(EraCbor(era, cbor)) = &cip25_tx {
-            let tx = decode_era_tx(*era, cbor)?;
+        if let Some(payload) = &cip25_tx {
+            let tx = decode_era_tx(payload.tag(), payload.bytes())?;
 
             if let Some((_, standard, ref_asset_bytes)) = &cip68_reference {
                 if let Some(metadata) =
@@ -429,7 +429,7 @@ impl AssetModelBuilder {
 
     async fn into_model<D>(self, domain: &Facade<D>) -> Result<Asset, StatusCode>
     where
-        D: Domain + Clone + Send + Sync + 'static,
+        D: Domain<ChainSpecificError = CardanoError> + Clone + Send + Sync + 'static,
         Option<AssetState>: From<D::Entity>,
     {
         let policy = self.subject[..28].to_vec();
@@ -474,7 +474,7 @@ pub async fn by_subject<D>(
 ) -> Result<Json<Asset>, StatusCode>
 where
     Option<AssetState>: From<D::Entity>,
-    D: Domain + Clone + Send + Sync + 'static,
+    D: Domain<ChainSpecificError = CardanoError> + Clone + Send + Sync + 'static,
 {
     let subject = hex::decode(&unit).map_err(|_| StatusCode::BAD_REQUEST)?;
     let entity_key = pallas::crypto::hash::Hasher::<256>::hash(subject.as_slice());
@@ -488,7 +488,7 @@ where
     let initial_tx = if let Some(initial_tx) = asset_state.initial_tx {
         domain
             .query()
-            .tx_cbor(initial_tx.as_slice().to_vec())
+            .tx_cbor(pallas_hash_to_core(initial_tx))
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     } else {
@@ -611,7 +611,7 @@ async fn tx_has_subject<D>(
     tx: &MultiEraTx<'_>,
 ) -> Result<bool, StatusCode>
 where
-    D: Domain + Clone + Send + Sync + 'static,
+    D: Domain<ChainSpecificError = CardanoError> + Clone + Send + Sync + 'static,
 {
     for (_, output) in tx.produces() {
         if output_has_subject(subject, &output) {
@@ -620,9 +620,9 @@ where
     }
 
     for input in tx.consumes() {
-        if let Some(EraCbor(era, cbor)) = domain
+        if let Some(TaggedPayload(era, cbor)) = domain
             .query()
-            .tx_cbor(input.hash().as_slice().to_vec())
+            .tx_cbor(pallas_hash_to_core(*input.hash()))
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         {
@@ -651,7 +651,7 @@ async fn find_txs<D>(
     block: &[u8],
 ) -> Result<Vec<AssetTransactionsInner>, StatusCode>
 where
-    D: Domain + Clone + Send + Sync + 'static,
+    D: Domain<ChainSpecificError = CardanoError> + Clone + Send + Sync + 'static,
 {
     let block = MultiEraBlock::decode(block).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
@@ -685,7 +685,7 @@ pub async fn by_subject_transactions<D>(
     State(domain): State<Facade<D>>,
 ) -> Result<Json<Vec<AssetTransactionsInner>>, Error>
 where
-    D: Domain + Clone + Send + Sync + 'static,
+    D: Domain<ChainSpecificError = CardanoError> + Clone + Send + Sync + 'static,
 {
     let pagination = Pagination::try_from(params)?;
     pagination.enforce_max_scan_limit(domain.config.max_scan_items())?;

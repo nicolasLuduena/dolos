@@ -1,7 +1,65 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use pallas::codec::minicbor::{self, Decode, Encode};
+use minicbor::{Decode, Encode};
+
+// Provides minicbor Encode/Decode for TaggedPayload (which no longer derives them)
+// using the on-disk CBOR format: array(2) [ uint(tag), bytes(payload) ]
+mod tagged_payload_codec {
+    use dolos_core::TaggedPayload;
+
+    pub fn encode<W: minicbor::encode::Write, C>(
+        v: &TaggedPayload,
+        e: &mut minicbor::Encoder<W>,
+        _: &mut C,
+    ) -> Result<(), minicbor::encode::Error<W::Error>> {
+        e.array(2)?.u16(v.0)?.bytes(&v.1)?;
+        Ok(())
+    }
+
+    pub fn decode<'b, C>(
+        d: &mut minicbor::Decoder<'b>,
+        _: &mut C,
+    ) -> Result<TaggedPayload, minicbor::decode::Error> {
+        let len = d.array()?;
+        if len != Some(2) {
+            return Err(minicbor::decode::Error::message("expected 2-element array for TaggedPayload"));
+        }
+        let tag = d.u16()?;
+        let payload = d.bytes()?.to_vec();
+        Ok(TaggedPayload(tag, payload))
+    }
+}
+
+mod opt_tagged_payload_codec {
+    use dolos_core::TaggedPayload;
+
+    pub fn encode<W: minicbor::encode::Write, C>(
+        v: &Option<TaggedPayload>,
+        e: &mut minicbor::Encoder<W>,
+        ctx: &mut C,
+    ) -> Result<(), minicbor::encode::Error<W::Error>> {
+        match v {
+            None => {
+                e.null()?;
+                Ok(())
+            }
+            Some(inner) => super::tagged_payload_codec::encode(inner, e, ctx),
+        }
+    }
+
+    pub fn decode<'b, C>(
+        d: &mut minicbor::Decoder<'b>,
+        ctx: &mut C,
+    ) -> Result<Option<TaggedPayload>, minicbor::decode::Error> {
+        if d.datatype()? == minicbor::data::Type::Null {
+            d.null()?;
+            Ok(None)
+        } else {
+            Ok(Some(super::tagged_payload_codec::decode(d, ctx)?))
+        }
+    }
+}
 use redb::{ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
 use thiserror::Error;
 use tokio::sync::broadcast;
@@ -9,8 +67,8 @@ use tokio_stream::wrappers::BroadcastStream;
 use tracing::{debug, warn};
 
 use dolos_core::{
-    config::RedbMempoolConfig, ChainPoint, EraCbor, MempoolError, MempoolEvent, MempoolPage,
-    MempoolStore, MempoolTx, MempoolTxStage, TxHash, TxStatus,
+    config::RedbMempoolConfig, ChainPoint, MempoolError, MempoolEvent, MempoolPage,
+    MempoolStore, MempoolTx, MempoolTxStage, TaggedPayload, TxHash, TxStatus,
 };
 
 // ── Error newtype (mirrors wal/mod.rs pattern) ──────────────────────────
@@ -184,9 +242,9 @@ impl redb::Key for DbTxHash {
     }
 }
 
-/// Newtype wrapping `EraCbor` for the pending table value (foreign type).
+/// Newtype wrapping `TaggedPayload` for the pending table value (foreign type).
 #[derive(Debug)]
-struct DbEraCbor(EraCbor);
+struct DbEraCbor(TaggedPayload);
 
 impl redb::Value for DbEraCbor {
     type SelfType<'a>
@@ -206,14 +264,19 @@ impl redb::Value for DbEraCbor {
     where
         Self: 'a,
     {
-        Self(minicbor::decode(data).unwrap())
+        let mut d = minicbor::Decoder::new(data);
+        let payload = tagged_payload_codec::decode(&mut d, &mut ()).unwrap();
+        Self(payload)
     }
 
     fn as_bytes<'a, 'b: 'a>(value: &'a Self::SelfType<'b>) -> Self::AsBytes<'a>
     where
         Self: 'b,
     {
-        minicbor::to_vec(&value.0).unwrap()
+        let mut buf = Vec::new();
+        let mut e = minicbor::Encoder::new(&mut buf);
+        tagged_payload_codec::encode(&value.0, &mut e, &mut ()).unwrap();
+        buf
     }
 
     fn type_name() -> redb::TypeName {
@@ -239,8 +302,8 @@ struct InflightRecord {
     stage: InflightStage,
     #[n(1)]
     confirmations: u32,
-    #[n(2)]
-    payload: EraCbor,
+    #[cbor(n(2), with = "tagged_payload_codec")]
+    payload: TaggedPayload,
     #[cbor(n(3), with = "minicbor::bytes")]
     confirmed_at: Option<Vec<u8>>,
     #[n(4)]
@@ -289,8 +352,8 @@ struct FinalizedEntry {
     confirmations: u32,
     #[cbor(n(2), with = "minicbor::bytes")]
     confirmed_at: Option<Vec<u8>>,
-    #[n(3)]
-    payload: Option<EraCbor>,
+    #[cbor(n(3), with = "opt_tagged_payload_codec")]
+    payload: Option<TaggedPayload>,
     #[n(4)]
     dropped: Option<bool>,
 }
@@ -339,20 +402,19 @@ impl FinalizedEntry {
         };
         MempoolTx {
             hash: TxHash::from(hash_bytes),
-            payload: self.payload.unwrap_or(EraCbor(0, vec![])),
+            payload: self.payload.unwrap_or(TaggedPayload(0, vec![])),
             stage,
             confirmations: self.confirmations,
             non_confirmations: 0,
             confirmed_at: self
                 .confirmed_at
                 .map(|b| ChainPoint::from_bytes(b[..].try_into().unwrap())),
-            report: None,
         }
     }
 }
 
 impl InflightRecord {
-    fn new(payload: EraCbor) -> Self {
+    fn new(payload: TaggedPayload) -> Self {
         Self {
             stage: InflightStage::Propagated,
             confirmations: 0,
@@ -415,7 +477,7 @@ impl InflightRecord {
 
     fn into_finalized_entry(self, hash: TxHash) -> FinalizedEntry {
         FinalizedEntry {
-            hash: hash.to_vec(),
+            hash: hash.as_slice().to_vec(),
             confirmations: self.confirmations,
             confirmed_at: self.confirmed_at,
             payload: Some(self.payload),
@@ -425,7 +487,7 @@ impl InflightRecord {
 
     fn into_dropped_entry(self, hash: TxHash) -> FinalizedEntry {
         FinalizedEntry {
-            hash: hash.to_vec(),
+            hash: hash.as_slice().to_vec(),
             confirmations: self.confirmations,
             confirmed_at: self.confirmed_at,
             payload: Some(self.payload),
@@ -449,7 +511,6 @@ impl InflightRecord {
                 .confirmed_at
                 .as_ref()
                 .map(|b| ChainPoint::from_bytes(b[..].try_into().unwrap())),
-            report: None,
         }
     }
 }
@@ -486,7 +547,6 @@ impl PendingTable {
                 confirmations: 0,
                 non_confirmations: 0,
                 confirmed_at: None,
-                report: None,
             });
         }
         Ok(result)
@@ -520,7 +580,7 @@ impl PendingTable {
     fn insert(
         wx: &redb::WriteTransaction,
         hash: &TxHash,
-        payload: &EraCbor,
+        payload: &TaggedPayload,
     ) -> Result<(), RedbMempoolError> {
         let mut table = wx.open_table(Self::DEF)?;
         let seq = match table.last()? {
@@ -535,7 +595,7 @@ impl PendingTable {
     fn drain_by_hashes(
         wx: &redb::WriteTransaction,
         hashes: &HashSet<TxHash>,
-    ) -> Result<Vec<(TxHash, EraCbor)>, RedbMempoolError> {
+    ) -> Result<Vec<(TxHash, TaggedPayload)>, RedbMempoolError> {
         let mut table = wx.open_table(Self::DEF)?;
         let extracted = table.extract_if(|key, _value| hashes.contains(&key.hash()))?;
         extracted
@@ -1017,11 +1077,11 @@ mod tests {
     }
 
     fn test_point() -> ChainPoint {
-        ChainPoint::Specific(12345, pallas::crypto::hash::Hash::new([0xAB; 32]))
+        ChainPoint::Specific(12345, dolos_core::hash::Hash::new([0xAB; 32]))
     }
 
     fn test_point_2() -> ChainPoint {
-        ChainPoint::Specific(12346, pallas::crypto::hash::Hash::new([0xCD; 32]))
+        ChainPoint::Specific(12346, dolos_core::hash::Hash::new([0xCD; 32]))
     }
 
     #[test]

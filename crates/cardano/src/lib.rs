@@ -1,5 +1,8 @@
-use pallas::ledger::traverse::{MultiEraBlock, MultiEraOutput};
-use std::sync::Arc;
+use pallas::{
+    crypto::hash::Hasher,
+    ledger::traverse::{MultiEraBlock, MultiEraInput, MultiEraOutput, MultiEraTx},
+};
+use std::{path::Path, sync::Arc};
 use tracing::info;
 
 // re-export pallas for version compatibility downstream
@@ -7,8 +10,9 @@ pub use pallas;
 
 use dolos_core::{
     config::CardanoConfig, BlockSlot, ChainError, ChainPoint, Domain, DomainError, EntityKey,
-    EraCbor, Genesis, MempoolAwareUtxoStore, MempoolTx, MempoolUpdate, RawBlock, StateStore,
-    TipEvent, WorkUnit,
+    MempoolAwareUtxoStore, MempoolTx, MempoolUpdate, RawBlock, StateStore, TaggedPayload,
+    TipEvent,
+    TxoRef, WorkUnit,
 };
 
 use crate::{
@@ -51,9 +55,72 @@ pub use eras::*;
 pub use model::*;
 pub use utils::{mutable_slots, network_from_genesis};
 
+/// Trait alias for [`dolos_core::Domain`] implementations backed by Cardano chain logic.
+///
+/// Equivalent to `Domain<Chain = CardanoLogic, ChainSpecificError = CardanoError, Genesis = CardanoGenesis>`,
+/// but avoids repeating all three associated-type constraints at every call site.
+/// Use this in place of the verbose bound anywhere inside the `cardano` crate.
+pub trait CardanoDomain:
+    dolos_core::Domain<
+    Chain = CardanoLogic,
+    ChainSpecificError = CardanoError,
+    Genesis = CardanoGenesis,
+>
+{
+}
+
+impl<T> CardanoDomain for T where
+    T: dolos_core::Domain<
+        Chain = CardanoLogic,
+        ChainSpecificError = CardanoError,
+        Genesis = CardanoGenesis,
+    >
+{
+}
+
 pub type Block<'a> = MultiEraBlock<'a>;
 
 pub type UtxoBody<'a> = MultiEraOutput<'a>;
+
+// ============================================================================
+// Pallas ↔ dolos_core conversions (orphan rule prevents From/TryFrom impls)
+// ============================================================================
+
+pub fn pallas_hash_to_core<const N: usize>(
+    h: pallas::crypto::hash::Hash<N>,
+) -> dolos_core::hash::Hash<N> {
+    dolos_core::hash::Hash::new(*h)
+}
+
+// Can the era integer be removed? Not sure. Santi said something about it.
+pub(crate) fn multi_era_tx_from_era_cbor(
+    era_body: &TaggedPayload,
+) -> Result<MultiEraTx<'_>, CardanoError> {
+    Ok(MultiEraTx::decode(era_body.bytes())?)
+}
+
+pub(crate) fn txo_ref_from_pallas(hash: pallas::crypto::hash::Hash<32>, idx: u32) -> TxoRef {
+    TxoRef(pallas_hash_to_core(hash), idx)
+}
+
+pub(crate) fn era_cbor_from_output(output: &MultiEraOutput<'_>) -> TaggedPayload {
+    TaggedPayload(output.era().into(), output.encode())
+}
+
+pub(crate) fn txo_ref_from_input(input: &MultiEraInput<'_>) -> TxoRef {
+    TxoRef(pallas_hash_to_core(*input.hash()), input.index() as u32)
+}
+
+pub fn core_hash_to_pallas<const N: usize>(
+    h: dolos_core::hash::Hash<N>,
+) -> pallas::crypto::hash::Hash<N> {
+    (*h.as_ref()).into()
+}
+
+fn multi_era_output_from_era_cbor(era_body: &TaggedPayload) -> Result<MultiEraOutput<'_>, CardanoError> {
+    let era = pallas::ledger::traverse::Era::try_from(era_body.tag())?;
+    Ok(MultiEraOutput::decode(era, era_body.bytes())?)
+}
 
 /// Cardano-specific work unit variants.
 ///
@@ -77,7 +144,13 @@ pub enum CardanoWorkUnit {
 
 impl<D> WorkUnit<D> for CardanoWorkUnit
 where
-    D: Domain<Chain = CardanoLogic, Entity = CardanoEntity, EntityDelta = CardanoDelta>,
+    D: Domain<
+        Chain = CardanoLogic,
+        Entity = CardanoEntity,
+        EntityDelta = CardanoDelta,
+        ChainSpecificError = CardanoError,
+        Genesis = CardanoGenesis,
+    >,
 {
     fn name(&self) -> &'static str {
         match self {
@@ -90,7 +163,7 @@ where
         }
     }
 
-    fn load(&mut self, domain: &D) -> Result<(), DomainError> {
+    fn load(&mut self, domain: &D) -> Result<(), DomainError<D::ChainSpecificError>> {
         match self {
             Self::Genesis(w) => <genesis::GenesisWorkUnit as WorkUnit<D>>::load(w, domain),
             Self::Roll(w) => <roll::RollWorkUnit as WorkUnit<D>>::load(w, domain),
@@ -101,7 +174,7 @@ where
         }
     }
 
-    fn compute(&mut self) -> Result<(), DomainError> {
+    fn compute(&mut self) -> Result<(), DomainError<D::ChainSpecificError>> {
         match self {
             Self::Genesis(w) => <genesis::GenesisWorkUnit as WorkUnit<D>>::compute(w),
             Self::Roll(w) => <roll::RollWorkUnit as WorkUnit<D>>::compute(w),
@@ -112,7 +185,7 @@ where
         }
     }
 
-    fn commit_wal(&mut self, domain: &D) -> Result<(), DomainError> {
+    fn commit_wal(&mut self, domain: &D) -> Result<(), DomainError<D::ChainSpecificError>> {
         match self {
             Self::Genesis(w) => <genesis::GenesisWorkUnit as WorkUnit<D>>::commit_wal(w, domain),
             Self::Roll(w) => <roll::RollWorkUnit as WorkUnit<D>>::commit_wal(w, domain),
@@ -123,7 +196,7 @@ where
         }
     }
 
-    fn commit_state(&mut self, domain: &D) -> Result<(), DomainError> {
+    fn commit_state(&mut self, domain: &D) -> Result<(), DomainError<D::ChainSpecificError>> {
         match self {
             Self::Genesis(w) => <genesis::GenesisWorkUnit as WorkUnit<D>>::commit_state(w, domain),
             Self::Roll(w) => <roll::RollWorkUnit as WorkUnit<D>>::commit_state(w, domain),
@@ -134,7 +207,7 @@ where
         }
     }
 
-    fn commit_archive(&mut self, domain: &D) -> Result<(), DomainError> {
+    fn commit_archive(&mut self, domain: &D) -> Result<(), DomainError<D::ChainSpecificError>> {
         match self {
             Self::Genesis(w) => {
                 <genesis::GenesisWorkUnit as WorkUnit<D>>::commit_archive(w, domain)
@@ -147,7 +220,7 @@ where
         }
     }
 
-    fn commit_indexes(&mut self, domain: &D) -> Result<(), DomainError> {
+    fn commit_indexes(&mut self, domain: &D) -> Result<(), DomainError<D::ChainSpecificError>> {
         match self {
             Self::Genesis(w) => {
                 <genesis::GenesisWorkUnit as WorkUnit<D>>::commit_indexes(w, domain)
@@ -197,10 +270,96 @@ pub struct CardanoLogic {
 impl CardanoLogic {
     /// Refresh the cached era summary from state.
     /// Called after work units that may change era information (like genesis).
-    pub fn refresh_cache<D: Domain>(&mut self, state: &D::State) -> Result<(), ChainError> {
+    pub fn refresh_cache<D: Domain>(
+        &mut self,
+        state: &D::State,
+    ) -> Result<(), ChainError<D::ChainSpecificError>> {
         self.cache.eras = eras::load_era_summary::<D>(state)?;
 
         Ok(())
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum CardanoError {
+    #[error("traverse error: {0}")]
+    Traverse(#[from] pallas::ledger::traverse::Error),
+
+    #[error("address decoding error: {0}")]
+    Address(#[from] pallas::ledger::addresses::Error),
+
+    #[error("cbor decoding error: {0}")]
+    Cbor(#[from] pallas::codec::minicbor::decode::Error),
+
+    #[error("validation error: {0}")]
+    Validation(#[from] pallas::ledger::validate::utils::ValidationError),
+
+    #[error("couldn't evaluate phase-2 script: {0}")]
+    Phase2EvaluationError(String),
+
+    #[error("phase-2 script rejected the transaction")]
+    Phase2ValidationRejected(Vec<String>),
+
+    #[error("invalid pool registration params")]
+    InvalidPoolParams,
+
+    #[error("invalid governance proposal params")]
+    InvalidProposalParams,
+
+    #[error("chain tip is not available")]
+    MissingChainPoint,
+
+    #[error("protocol params not found: {0}")]
+    PParamsNotFound(String),
+
+    #[error("no active epoch")]
+    NoActiveEpoch,
+
+    #[error("era not found")]
+    EraNotFound,
+
+    #[error("epoch value version not found for epoch {0}")]
+    EpochValueVersionNotFound(u64),
+}
+
+#[derive(Clone)]
+pub struct CardanoGenesis {
+    pub byron: pallas::interop::hardano::configs::byron::GenesisFile,
+    pub shelley: pallas::interop::hardano::configs::shelley::GenesisFile,
+    pub alonzo: pallas::interop::hardano::configs::alonzo::GenesisFile,
+    pub conway: pallas::interop::hardano::configs::conway::GenesisFile,
+    pub shelley_hash: pallas::ledger::primitives::Hash<32>,
+    pub force_protocol: Option<usize>,
+}
+
+impl dolos_core::Genesis for CardanoGenesis {}
+
+impl CardanoGenesis {
+    pub fn from_file_paths(
+        byron: impl AsRef<Path>,
+        shelley: impl AsRef<Path>,
+        alonzo: impl AsRef<Path>,
+        conway: impl AsRef<Path>,
+        force_protocol: Option<usize>,
+    ) -> Result<Self, std::io::Error> {
+        let shelley_bytes = std::fs::read(shelley.as_ref())?;
+        let mut hasher = Hasher::<256>::new();
+        hasher.input(&shelley_bytes);
+        let shelley_hash = hasher.finalize();
+
+        let byron = pallas::ledger::configs::byron::from_file(byron.as_ref())?;
+        let shelley = pallas::ledger::configs::shelley::from_file(shelley.as_ref())?;
+        let alonzo = pallas::ledger::configs::alonzo::from_file(alonzo.as_ref())?;
+        let conway = pallas::ledger::configs::conway::from_file(conway.as_ref())?;
+
+        Ok(Self {
+            byron,
+            shelley,
+            alonzo,
+            conway,
+            force_protocol,
+            shelley_hash,
+        })
     }
 }
 
@@ -210,14 +369,23 @@ impl dolos_core::ChainLogic for CardanoLogic {
     type Utxo = OwnedMultiEraOutput;
     type Delta = CardanoDelta;
     type Entity = CardanoEntity;
-    type WorkUnit<D: Domain<Chain = Self, Entity = Self::Entity, EntityDelta = Self::Delta>> =
-        CardanoWorkUnit;
+    type WorkUnit<
+        D: Domain<
+            Chain = Self,
+            Entity = Self::Entity,
+            EntityDelta = Self::Delta,
+            ChainSpecificError = Self::ChainSpecificError,
+            Genesis = Self::Genesis,
+        >,
+    > = CardanoWorkUnit;
+    type ChainSpecificError = CardanoError;
+    type Genesis = CardanoGenesis;
 
     fn initialize<D: Domain>(
         config: Self::Config,
         state: &D::State,
-        genesis: &Genesis,
-    ) -> Result<Self, ChainError> {
+        genesis: Self::Genesis,
+    ) -> Result<Self, ChainError<Self::ChainSpecificError>> {
         info!("initializing");
 
         let cursor = state.read_cursor()?;
@@ -227,14 +395,14 @@ impl dolos_core::ChainLogic for CardanoLogic {
             None => WorkBuffer::Empty,
         };
 
-        let eras = eras::load_era_summary::<D>(state)?;
+        let eras = eras::load_chain_summary_from_state(state)?;
 
         // Use randomness_stability_window (4k/f) for the RUPD trigger boundary.
         // The Haskell ledger's startStep fires at randomnessStabilisationWindow
         // into the epoch, capturing addrsRew (registered accounts) for the pre-Babbage
         // prefilter. Using 4k/f instead of 3k/f ensures the state at RUPD time includes
         // all deregistrations up to the correct threshold.
-        let stability_window = utils::randomness_stability_window(genesis);
+        let stability_window = utils::randomness_stability_window(&genesis)?;
 
         Ok(Self {
             config,
@@ -252,12 +420,17 @@ impl dolos_core::ChainLogic for CardanoLogic {
         work.can_receive_block()
     }
 
-    fn receive_block(&mut self, raw: RawBlock) -> Result<BlockSlot, ChainError> {
+    fn receive_block(
+        &mut self,
+        raw: RawBlock,
+    ) -> Result<BlockSlot, ChainError<Self::ChainSpecificError>> {
         if !self.can_receive_block() {
             return Err(ChainError::CantReceiveBlock(raw));
         }
 
-        let block = OwnedMultiEraBlock::decode(raw)?;
+        let block = OwnedMultiEraBlock::decode(raw)
+            .map_err(CardanoError::from)
+            .map_err(ChainError::ChainSpecific)?;
 
         let work = self.work.take().expect("work buffer is initialized");
 
@@ -272,7 +445,13 @@ impl dolos_core::ChainLogic for CardanoLogic {
 
     fn pop_work<D>(&mut self, domain: &D) -> Option<CardanoWorkUnit>
     where
-        D: Domain<Chain = Self, Entity = CardanoEntity, EntityDelta = CardanoDelta>,
+        D: Domain<
+            Chain = Self,
+            Entity = CardanoEntity,
+            EntityDelta = CardanoDelta,
+            ChainSpecificError = Self::ChainSpecificError,
+            Genesis = Self::Genesis,
+        >,
     {
         // Refresh cache if needed (after previous genesis or estart execution)
         if self.needs_cache_refresh {
@@ -331,18 +510,23 @@ impl dolos_core::ChainLogic for CardanoLogic {
 
     fn compute_undo(
         block: &dolos_core::Cbor,
-        inputs: &std::collections::HashMap<dolos_core::TxoRef, Arc<EraCbor>>,
+        inputs: &std::collections::HashMap<dolos_core::TxoRef, Arc<TaggedPayload>>,
         point: ChainPoint,
-    ) -> Result<dolos_core::UndoBlockData, ChainError> {
+    ) -> Result<dolos_core::UndoBlockData, ChainError<Self::ChainSpecificError>> {
         let block_arc = Arc::new(block.clone());
-        let blockd = OwnedMultiEraBlock::decode(block_arc)?;
+        let blockd = OwnedMultiEraBlock::decode(block_arc)
+            .map_err(CardanoError::from)
+            .map_err(ChainError::ChainSpecific)?;
         let blockv = blockd.view();
 
         let decoded_inputs: std::collections::HashMap<_, _> = inputs
             .iter()
             .map(|(k, v)| {
-                let out = (k.clone(), OwnedMultiEraOutput::decode(v.clone())?);
-                Result::<_, ChainError>::Ok(out)
+                let decoded = OwnedMultiEraOutput::decode(v.clone())
+                    .map_err(CardanoError::from)
+                    .map_err(ChainError::ChainSpecific)?;
+                let out = (k.clone(), decoded);
+                Result::<_, ChainError<Self::ChainSpecificError>>::Ok(out)
             })
             .collect::<Result<_, _>>()?;
 
@@ -351,7 +535,11 @@ impl dolos_core::ChainLogic for CardanoLogic {
 
         let index_delta = crate::indexes::index_delta_from_utxo_delta(point, &utxo_delta);
 
-        let tx_hashes = blockv.txs().iter().map(|tx| tx.hash()).collect();
+        let tx_hashes = blockv
+            .txs()
+            .iter()
+            .map(|tx| pallas_hash_to_core(tx.hash()))
+            .collect();
 
         Ok(dolos_core::UndoBlockData {
             utxo_delta,
@@ -362,18 +550,23 @@ impl dolos_core::ChainLogic for CardanoLogic {
 
     fn compute_catchup(
         block: &dolos_core::Cbor,
-        inputs: &std::collections::HashMap<dolos_core::TxoRef, Arc<EraCbor>>,
+        inputs: &std::collections::HashMap<dolos_core::TxoRef, Arc<TaggedPayload>>,
         point: ChainPoint,
-    ) -> Result<dolos_core::CatchUpBlockData, ChainError> {
+    ) -> Result<dolos_core::CatchUpBlockData, ChainError<Self::ChainSpecificError>> {
         let block_arc = Arc::new(block.clone());
-        let blockd = OwnedMultiEraBlock::decode(block_arc)?;
+        let blockd = OwnedMultiEraBlock::decode(block_arc)
+            .map_err(CardanoError::from)
+            .map_err(ChainError::ChainSpecific)?;
         let blockv = blockd.view();
 
         let decoded_inputs: std::collections::HashMap<_, _> = inputs
             .iter()
             .map(|(k, v)| {
-                let out = (k.clone(), OwnedMultiEraOutput::decode(v.clone())?);
-                Result::<_, ChainError>::Ok(out)
+                let decoded = OwnedMultiEraOutput::decode(v.clone())
+                    .map_err(CardanoError::from)
+                    .map_err(ChainError::ChainSpecific)?;
+                let out = (k.clone(), decoded);
+                Result::<_, ChainError<Self::ChainSpecificError>>::Ok(out)
             })
             .collect::<Result<_, _>>()?;
 
@@ -389,7 +582,11 @@ impl dolos_core::ChainLogic for CardanoLogic {
         // Archive indexes (shared logic)
         builder.index_block(blockv, &decoded_inputs);
 
-        let tx_hashes = blockv.txs().iter().map(|tx| tx.hash()).collect();
+        let tx_hashes = blockv
+            .txs()
+            .iter()
+            .map(|tx| pallas_hash_to_core(tx.hash()))
+            .collect();
 
         Ok(dolos_core::CatchUpBlockData {
             utxo_delta,
@@ -398,51 +595,104 @@ impl dolos_core::ChainLogic for CardanoLogic {
         })
     }
 
-    fn decode_utxo(&self, utxo: Arc<EraCbor>) -> Result<Self::Utxo, ChainError> {
-        let out = OwnedMultiEraOutput::decode(utxo)?;
+    fn decode_utxo(
+        &self,
+        utxo: Arc<TaggedPayload>,
+    ) -> Result<Self::Utxo, ChainError<Self::ChainSpecificError>> {
+        let out = OwnedMultiEraOutput::decode(utxo)
+            .map_err(CardanoError::from)
+            .map_err(ChainError::ChainSpecific)?;
 
         Ok(out)
     }
 
-    fn mutable_slots(domain: &impl Domain) -> BlockSlot {
+    fn mutable_slots(
+        domain: &impl Domain<Genesis = CardanoGenesis>,
+    ) -> Result<BlockSlot, ChainError<CardanoError>> {
         utils::mutable_slots(&domain.genesis())
     }
 
-    fn validate_tx<D: Domain>(
+    fn validate_tx<D: Domain<ChainSpecificError = CardanoError>>(
         &self,
         cbor: &[u8],
         utxos: &MempoolAwareUtxoStore<D>,
         tip: Option<ChainPoint>,
-        genesis: &Genesis,
-    ) -> Result<MempoolTx, ChainError> {
+        genesis: &CardanoGenesis,
+    ) -> Result<MempoolTx, ChainError<Self::ChainSpecificError>> {
         validate::validate_tx(cbor, utxos, tip, genesis)
+    }
+
+    type EvalReport = pallas::ledger::validate::phase2::EvalReport;
+
+    fn eval_tx<D: Domain<ChainSpecificError = CardanoError>>(
+        cbor: &[u8],
+        utxos: &MempoolAwareUtxoStore<D>,
+    ) -> Result<Self::EvalReport, ChainError<Self::ChainSpecificError>> {
+        validate::evaluate_tx(cbor, utxos)
+    }
+
+    fn tx_produced_utxos(
+        era_body: &TaggedPayload,
+    ) -> Result<Vec<(dolos_core::TxoRef, TaggedPayload)>, CardanoError> {
+        let tx = multi_era_tx_from_era_cbor(era_body)?;
+        Ok(tx
+            .produces()
+            .iter()
+            .map(|(idx, output)| {
+                let txoref = txo_ref_from_pallas(tx.hash(), *idx as u32);
+                let body = era_cbor_from_output(output);
+                (txoref, body)
+            })
+            .collect())
+    }
+
+    fn tx_consumed_ref(era_body: &TaggedPayload) -> Result<Vec<dolos_core::TxoRef>, CardanoError> {
+        let tx = multi_era_tx_from_era_cbor(era_body)?;
+        Ok(tx.consumes().iter().map(txo_ref_from_input).collect())
+    }
+    fn find_tx_in_block(
+        block: &[u8],
+        tx_hash: &dolos_core::TxHash,
+    ) -> Result<Option<(TaggedPayload, dolos_core::TxOrder)>, Self::ChainSpecificError> {
+        let block = MultiEraBlock::decode(block)?;
+        let result = block
+            .txs()
+            .iter()
+            .enumerate()
+            .find(|(_, tx)| tx.hash().as_slice() == tx_hash.as_slice())
+            .map(|(idx, tx)| (TaggedPayload(block.era().into(), tx.encode()), idx));
+        Ok(result)
     }
 }
 
-pub fn load_effective_pparams<D: Domain>(state: &D::State) -> Result<PParamsSet, ChainError> {
+pub fn load_effective_pparams<D: Domain<ChainSpecificError = CardanoError>>(
+    state: &D::State,
+) -> Result<PParamsSet, ChainError<CardanoError>> {
     let epoch = load_epoch::<D>(state)?;
     let active = epoch.pparams.unwrap_live();
 
     Ok(active.clone())
 }
 
-pub fn load_epoch<D: Domain>(state: &D::State) -> Result<EpochState, ChainError> {
+pub fn load_epoch<D: Domain<ChainSpecificError = CardanoError>>(
+    state: &D::State,
+) -> Result<EpochState, ChainError<CardanoError>> {
     let epoch = state
         .read_entity_typed::<EpochState>(EpochState::NS, &EntityKey::from(CURRENT_EPOCH_KEY))?
-        .ok_or(ChainError::NoActiveEpoch)?;
+        .ok_or(ChainError::ChainSpecific(CardanoError::NoActiveEpoch))?;
 
     Ok(epoch)
 }
 
 #[cfg(test)]
-pub fn load_test_genesis(env: &str) -> Genesis {
+pub fn load_test_genesis(env: &str) -> CardanoGenesis {
     use std::path::PathBuf;
 
     let test_data = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap())
         .join("test_data")
         .join(env);
 
-    Genesis::from_file_paths(
+    CardanoGenesis::from_file_paths(
         test_data.join("genesis/byron.json"),
         test_data.join("genesis/shelley.json"),
         test_data.join("genesis/alonzo.json"),

@@ -34,11 +34,13 @@ impl EntityDelta for NonceTransition {
     }
 }
 
-fn next_largest_stable_slot(ctx: &super::WorkContext) -> BlockSlot {
-    let stability_window = nonce_stability_window(ctx.active_protocol.into(), &ctx.genesis);
+fn next_largest_stable_slot(
+    ctx: &super::WorkContext,
+) -> Result<BlockSlot, ChainError<crate::CardanoError>> {
+    let stability_window = nonce_stability_window(ctx.active_protocol.into(), &ctx.genesis)?;
     let epoch_finish_slot = ctx.chain_summary.epoch_start(ctx.starting_epoch_no() + 1);
 
-    sub!(epoch_finish_slot, stability_window)
+    Ok(sub!(epoch_finish_slot, stability_window))
 }
 
 fn initial_nonces(ctx: &super::WorkContext) -> Option<Nonces> {
@@ -65,8 +67,11 @@ fn next_nonce(ctx: &super::WorkContext) -> Option<Nonces> {
 pub struct BoundaryVisitor;
 
 impl super::BoundaryVisitor for BoundaryVisitor {
-    fn flush(&mut self, ctx: &mut super::WorkContext) -> Result<(), ChainError> {
-        let next_slot = next_largest_stable_slot(ctx);
+    fn flush(
+        &mut self,
+        ctx: &mut super::WorkContext,
+    ) -> Result<(), ChainError<crate::CardanoError>> {
+        let next_slot = next_largest_stable_slot(ctx)?;
         let next_nonce = next_nonce(ctx);
 
         ctx.deltas.add_for_entity(NonceTransition {

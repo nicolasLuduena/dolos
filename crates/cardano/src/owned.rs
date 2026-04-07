@@ -1,4 +1,4 @@
-use dolos_core::{BlockBody, BlockHash, BlockSlot, EraCbor, RawBlock, RawUtxoMap, TxoRef};
+use dolos_core::{BlockBody, BlockHash, BlockSlot, RawBlock, RawUtxoMap, TaggedPayload, TxoRef};
 use pallas::ledger::traverse::{MultiEraBlock, MultiEraOutput};
 use self_cell::self_cell;
 use std::sync::Arc;
@@ -32,7 +32,7 @@ impl dolos_core::Block for OwnedMultiEraBlock {
     }
 
     fn hash(&self) -> BlockHash {
-        self.view().hash()
+        crate::pallas_hash_to_core(self.view().hash())
     }
 
     fn raw(&self) -> RawBlock {
@@ -42,7 +42,7 @@ impl dolos_core::Block for OwnedMultiEraBlock {
 
 self_cell!(
     pub struct OwnedMultiEraOutput {
-        owner: Arc<EraCbor>,
+        owner: Arc<TaggedPayload>,
 
         #[not_covariant]
         dependent: MultiEraOutput,
@@ -50,9 +50,9 @@ self_cell!(
 );
 
 impl OwnedMultiEraOutput {
-    pub fn decode(buf: Arc<EraCbor>) -> Result<Self, pallas::ledger::traverse::Error> {
+    pub fn decode(buf: Arc<TaggedPayload>) -> Result<Self, pallas::ledger::traverse::Error> {
         Self::try_new(buf, |x| {
-            let EraCbor(era, cbor) = x.as_ref();
+            let TaggedPayload(era, cbor) = x.as_ref();
 
             let era = pallas::ledger::traverse::Era::try_from(*era)?;
 

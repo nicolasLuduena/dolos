@@ -304,10 +304,12 @@ where
         }
     }
 
-    pub fn try_snapshot_at(&self, epoch: Epoch) -> Result<&T, ChainError> {
+    pub fn try_snapshot_at(&self, epoch: Epoch) -> Result<&T, ChainError<crate::CardanoError>> {
         match self.snapshot_at(epoch) {
             Some(value) => Ok(value),
-            None => Err(ChainError::EpochValueVersionNotFound(epoch)),
+            None => Err(ChainError::ChainSpecific(
+                crate::CardanoError::EpochValueVersionNotFound(epoch),
+            )),
         }
     }
 }
@@ -347,9 +349,15 @@ macro_rules! entity_boilerplate {
         }
 
         impl dolos_core::Entity for $type {
-            fn decode_entity(ns: Namespace, value: &EntityValue) -> Result<Self, ChainError> {
+            type ChainSpecificError = crate::CardanoError;
+
+            fn decode_entity(
+                ns: Namespace,
+                value: &EntityValue,
+            ) -> Result<Self, ChainError<crate::CardanoError>> {
                 assert_eq!(ns, $type::NS);
-                let value = pallas::codec::minicbor::decode(value)?;
+                let value = pallas::codec::minicbor::decode(value)
+                    .map_err(|e| ChainError::ChainSpecific(crate::CardanoError::Cbor(e)))?;
                 Ok(value)
             }
 
@@ -1227,8 +1235,8 @@ macro_rules! pgetter {
 macro_rules! ensure_pparam {
     ($kind:ident, $ty:ty) => {
         paste::paste! {
-            pub fn [<ensure_ $kind:snake>](&self) -> Result<$ty, ChainError> {
-                self.$kind().ok_or(ChainError::PParamsNotFound(stringify!($kind).to_string()))
+            pub fn [<ensure_ $kind:snake>](&self) -> Result<$ty, ChainError<crate::CardanoError>> {
+                self.$kind().ok_or(ChainError::ChainSpecific(crate::CardanoError::PParamsNotFound(stringify!($kind).to_string())))
             }
         }
     };
@@ -1940,7 +1948,12 @@ variant_boilerplate!(PendingRewardState);
 variant_boilerplate!(PendingMirState);
 
 impl dolos_core::Entity for CardanoEntity {
-    fn decode_entity(ns: Namespace, value: &EntityValue) -> Result<Self, ChainError> {
+    type ChainSpecificError = crate::CardanoError;
+
+    fn decode_entity(
+        ns: Namespace,
+        value: &EntityValue,
+    ) -> Result<Self, ChainError<crate::CardanoError>> {
         match ns {
             EraSummary::NS => EraSummary::decode_entity(ns, value).map(Into::into),
             AccountState::NS => AccountState::decode_entity(ns, value).map(Into::into),

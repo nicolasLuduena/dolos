@@ -8,19 +8,10 @@
 //!    be processed together). A batch is usually split into chunks for parallel
 //!    processing.
 
-use pallas::{
-    codec::minicbor::{self, Decode, Encode},
-    crypto::hash::{Hash, Hasher},
-    ledger::{
-        primitives::Epoch,
-        traverse::{MultiEraInput, MultiEraOutput, MultiEraTx, MultiEraUpdate},
-    },
-};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     fmt::Display,
-    path::Path,
     str::FromStr,
     sync::Arc,
 };
@@ -33,6 +24,7 @@ pub mod bootstrap;
 pub mod builtin;
 pub mod config;
 pub mod crawl;
+pub mod hash;
 pub mod import;
 pub mod indexes;
 pub mod mempool;
@@ -51,6 +43,8 @@ pub use work_unit::{MempoolUpdate, WorkUnit};
 
 pub type Era = u16;
 
+pub type Epoch = u64;
+
 /// The index of an output in a tx
 pub type TxoIdx = u32;
 
@@ -67,11 +61,10 @@ pub type Cbor = Vec<u8>;
 pub type BlockBody = Cbor;
 pub type RawBlock = Arc<BlockBody>;
 pub type RawBlockBatch = Vec<RawBlock>;
-pub type RawUtxoMap = HashMap<TxoRef, Arc<EraCbor>>;
-pub type BlockEra = pallas::ledger::traverse::Era;
-pub type BlockHash = Hash<32>;
+pub type RawUtxoMap = HashMap<TxoRef, Arc<TaggedPayload>>;
+pub type BlockHash = crate::hash::Hash<32>;
 pub type BlockHeader = Cbor;
-pub type TxHash = Hash<32>;
+pub type TxHash = crate::hash::Hash<32>;
 
 /// Data needed to undo a block during rollback.
 ///
@@ -96,7 +89,12 @@ pub struct CatchUpBlockData {
 
 pub type OutputIdx = u64;
 pub type UtxoBody = (u16, Cbor);
-pub type ChainTip = pallas::network::miniprotocols::chainsync::Tip;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChainTip {
+    pub point: ChainPoint,
+    pub block_number: u64,
+}
 pub type LogSeq = u64;
 
 pub use archive::*;
@@ -107,84 +105,36 @@ pub use point::*;
 pub use state::*;
 pub use wal::*;
 
-#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize, Encode, Decode)]
-pub struct EraCbor(
-    #[n(0)] pub Era,
-    #[cbor(n(1), with = "minicbor::bytes")] pub Cbor,
-);
+/// A chain-agnostic tagged payload: a `u16` discriminant (whose meaning is
+/// chain-specific, e.g. era for Cardano) paired with raw bytes.
+#[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
+pub struct TaggedPayload(pub u16, pub Vec<u8>);
 
-impl EraCbor {
-    pub fn era(&self) -> Era {
+impl TaggedPayload {
+    pub fn tag(&self) -> u16 {
         self.0
     }
 
-    pub fn cbor(&self) -> &[u8] {
+    pub fn bytes(&self) -> &[u8] {
         &self.1
     }
 }
 
-impl AsRef<[u8]> for EraCbor {
+impl AsRef<[u8]> for TaggedPayload {
     fn as_ref(&self) -> &[u8] {
         &self.1
     }
 }
 
-impl From<(Era, Cbor)> for EraCbor {
-    fn from(value: (Era, Cbor)) -> Self {
+impl From<(u16, Vec<u8>)> for TaggedPayload {
+    fn from(value: (u16, Vec<u8>)) -> Self {
         Self(value.0, value.1)
     }
 }
 
-impl From<EraCbor> for (Era, Cbor) {
-    fn from(value: EraCbor) -> Self {
+impl From<TaggedPayload> for (u16, Vec<u8>) {
+    fn from(value: TaggedPayload) -> Self {
         (value.0, value.1)
-    }
-}
-
-impl From<MultiEraOutput<'_>> for EraCbor {
-    fn from(value: MultiEraOutput<'_>) -> Self {
-        EraCbor(value.era().into(), value.encode())
-    }
-}
-
-impl<'a> TryFrom<&'a EraCbor> for MultiEraOutput<'a> {
-    type Error = pallas::codec::minicbor::decode::Error;
-
-    fn try_from(value: &'a EraCbor) -> Result<Self, Self::Error> {
-        let era = value.0.try_into().expect("era out of range");
-        MultiEraOutput::decode(era, &value.1)
-    }
-}
-
-impl<'a> TryFrom<&'a EraCbor> for MultiEraTx<'a> {
-    type Error = pallas::codec::minicbor::decode::Error;
-
-    fn try_from(value: &'a EraCbor) -> Result<Self, Self::Error> {
-        let era = value.0.try_into().expect("era out of range");
-        MultiEraTx::decode_for_era(era, &value.1)
-    }
-}
-
-impl TryFrom<EraCbor> for MultiEraUpdate<'_> {
-    type Error = pallas::codec::minicbor::decode::Error;
-
-    fn try_from(value: EraCbor) -> Result<Self, Self::Error> {
-        let era = value.0.try_into().expect("era out of range");
-        MultiEraUpdate::decode_for_era(era, &value.1)
-    }
-}
-
-impl From<&MultiEraInput<'_>> for TxoRef {
-    fn from(value: &MultiEraInput<'_>) -> Self {
-        TxoRef(*value.hash(), value.index() as u32)
-    }
-}
-
-impl From<TxoRef> for Vec<u8> {
-    fn from(value: TxoRef) -> Self {
-        let mut bytes = value.0.to_vec();
-        bytes.extend_from_slice(value.1.to_be_bytes().as_slice());
-        bytes
     }
 }
 
@@ -200,6 +150,16 @@ impl From<(TxHash, TxoIdx)> for TxoRef {
 impl From<TxoRef> for (TxHash, TxoIdx) {
     fn from(value: TxoRef) -> Self {
         (value.0, value.1)
+    }
+}
+
+impl TxoRef {
+    /// Serialize to the 36-byte index key format: `[tx_hash (32 bytes) || output_index (4 bytes, big-endian)]`.
+    pub fn to_index_bytes(&self) -> [u8; 36] {
+        let mut bytes = [0u8; 36];
+        bytes[0..32].copy_from_slice(self.0.as_slice());
+        bytes[32..36].copy_from_slice(&self.1.to_be_bytes());
+        bytes
     }
 }
 
@@ -229,10 +189,6 @@ impl FromStr for TxoRef {
     }
 }
 
-// TODO: remove legacy
-// #[derive(Debug, Eq, PartialEq, Hash)]
-// pub struct ChainPoint(pub BlockSlot, pub BlockHash);
-
 #[derive(Debug, Error)]
 pub enum BrokenInvariant {
     #[error("missing utxo {0:?}")]
@@ -254,16 +210,16 @@ pub enum BrokenInvariant {
     EpochBoundaryIncomplete,
 }
 
-pub type UtxoMap = HashMap<TxoRef, Arc<EraCbor>>;
+pub type UtxoMap = HashMap<TxoRef, Arc<TaggedPayload>>;
 
 pub type UtxoSet = HashSet<TxoRef>;
 
 #[derive(Default, Debug, Clone)]
 pub struct UtxoSetDelta {
-    pub produced_utxo: HashMap<TxoRef, Arc<EraCbor>>,
-    pub consumed_utxo: HashMap<TxoRef, Arc<EraCbor>>,
-    pub recovered_stxi: HashMap<TxoRef, Arc<EraCbor>>,
-    pub undone_utxo: HashMap<TxoRef, Arc<EraCbor>>,
+    pub produced_utxo: HashMap<TxoRef, Arc<TaggedPayload>>,
+    pub consumed_utxo: HashMap<TxoRef, Arc<TaggedPayload>>,
+    pub recovered_stxi: HashMap<TxoRef, Arc<TaggedPayload>>,
+    pub undone_utxo: HashMap<TxoRef, Arc<TaggedPayload>>,
 }
 
 #[derive(Debug, Clone)]
@@ -279,7 +235,7 @@ where
 {
     pub block: Cbor,
     pub delta: Vec<D>,
-    pub inputs: HashMap<TxoRef, Arc<EraCbor>>,
+    pub inputs: HashMap<TxoRef, Arc<TaggedPayload>>,
 }
 
 impl<D> LogValue<D>
@@ -333,48 +289,48 @@ pub enum ServeError {
     Internal(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
 
-#[derive(Clone)]
-pub struct Genesis {
-    pub byron: pallas::interop::hardano::configs::byron::GenesisFile,
-    pub shelley: pallas::interop::hardano::configs::shelley::GenesisFile,
-    pub alonzo: pallas::interop::hardano::configs::alonzo::GenesisFile,
-    pub conway: pallas::interop::hardano::configs::conway::GenesisFile,
-    pub shelley_hash: Hash<32>,
-    pub force_protocol: Option<usize>,
-}
+//#[derive(Clone)]
+//pub struct GenesisCardanoCardano {
+//    pub byron: pallas::interop::hardano::configs::byron::GenesisFile,
+//    pub shelley: pallas::interop::hardano::configs::shelley::GenesisFile,
+//    pub alonzo: pallas::interop::hardano::configs::alonzo::GenesisFile,
+//    pub conway: pallas::interop::hardano::configs::conway::GenesisFile,
+//    pub shelley_hash: Hash<32>,
+//    pub force_protocol: Option<usize>,
+//}
 
-impl Genesis {
-    pub fn network_magic(&self) -> u32 {
-        self.shelley.network_magic.unwrap_or_default()
-    }
-
-    pub fn from_file_paths(
-        byron: impl AsRef<Path>,
-        shelley: impl AsRef<Path>,
-        alonzo: impl AsRef<Path>,
-        conway: impl AsRef<Path>,
-        force_protocol: Option<usize>,
-    ) -> Result<Self, std::io::Error> {
-        let shelley_bytes = std::fs::read(shelley.as_ref())?;
-        let mut hasher = Hasher::<256>::new();
-        hasher.input(&shelley_bytes);
-        let shelley_hash = hasher.finalize();
-
-        let byron = pallas::ledger::configs::byron::from_file(byron.as_ref())?;
-        let shelley = pallas::ledger::configs::shelley::from_file(shelley.as_ref())?;
-        let alonzo = pallas::ledger::configs::alonzo::from_file(alonzo.as_ref())?;
-        let conway = pallas::ledger::configs::conway::from_file(conway.as_ref())?;
-
-        Ok(Self {
-            byron,
-            shelley,
-            alonzo,
-            conway,
-            force_protocol,
-            shelley_hash,
-        })
-    }
-}
+//impl GenesisCardanoCardano {
+//    pub fn network_magic(&self) -> u32 {
+//        self.shelley.network_magic.unwrap_or_default()
+//    }
+//
+//    pub fn from_file_paths(
+//        byron: impl AsRef<Path>,
+//        shelley: impl AsRef<Path>,
+//        alonzo: impl AsRef<Path>,
+//        conway: impl AsRef<Path>,
+//        force_protocol: Option<usize>,
+//    ) -> Result<Self, std::io::Error> {
+//        let shelley_bytes = std::fs::read(shelley.as_ref())?;
+//        let mut hasher = Hasher::<256>::new();
+//        hasher.input(&shelley_bytes);
+//        let shelley_hash = hasher.finalize();
+//
+//        let byron = pallas::ledger::configs::byron::from_file(byron.as_ref())?;
+//        let shelley = pallas::ledger::configs::shelley::from_file(shelley.as_ref())?;
+//        let alonzo = pallas::ledger::configs::alonzo::from_file(alonzo.as_ref())?;
+//        let conway = pallas::ledger::configs::conway::from_file(conway.as_ref())?;
+//
+//        Ok(Self {
+//            byron,
+//            shelley,
+//            alonzo,
+//            conway,
+//            force_protocol,
+//            shelley_hash,
+//        })
+//    }
+//}
 
 pub trait Block: Sized + Send + Sync {
     fn depends_on(&self, loaded: &mut RawUtxoMap) -> Vec<TxoRef>;
@@ -392,24 +348,15 @@ pub trait Block: Sized + Send + Sync {
 pub type Phase2Log = Vec<String>;
 
 #[derive(Debug, Error)]
-pub enum ChainError {
+pub enum ChainError<E: std::error::Error + Send + Sync + 'static> {
     #[error("can't receive block until previous work is completed")]
     CantReceiveBlock(RawBlock),
 
     #[error(transparent)]
     BrokenInvariant(#[from] BrokenInvariant),
 
-    #[error("decoding error")]
-    DecodingError(#[from] pallas::ledger::traverse::Error),
-
-    #[error("cbor error")]
-    CborDecodingError(#[from] pallas::codec::minicbor::decode::Error),
-
     #[error("invalid namespace: {0}")]
     InvalidNamespace(Namespace),
-
-    #[error("address decoding error")]
-    AddressDecoding(#[from] pallas::ledger::addresses::Error),
 
     #[error(transparent)]
     StateError(#[from] StateError),
@@ -418,41 +365,16 @@ pub enum ChainError {
     IndexError(#[from] IndexError),
 
     #[error(transparent)]
-    ArchiveError(#[from] ArchiveError),
+    ArchiveError(#[from] ArchiveError<E>),
 
     #[error("genesis field missing: {0}")]
     GenesisFieldMissing(String),
 
-    #[error("protocol params not found: {0}")]
-    PParamsNotFound(String),
-
-    #[error("no active epoch")]
-    NoActiveEpoch,
-
-    #[error("era not found")]
-    EraNotFound,
-
-    #[error("epoch value version not found for epoch {0}")]
-    EpochValueVersionNotFound(Epoch),
-
-    #[error("missing rewards")]
-    MissingRewards,
-
-    #[error("invalid pool params")]
-    InvalidPoolParams,
-
-    #[error("invalid proposal params")]
-    InvalidProposalParams,
-
-    #[error("phase-1 script rejected the transaction: {0}")]
-    Phase1ValidationRejected(#[from] pallas::ledger::validate::utils::ValidationError),
-
-    #[error("couldn't evaluate phase-2 script: {0}")]
-    Phase2EvaluationError(String),
-
-    #[error("phase-2 script rejected the transaction")]
-    Phase2ValidationRejected(Phase2Log),
+    #[error(transparent)]
+    ChainSpecific(E),
 }
+
+pub trait Genesis: Clone + Send + Sync + 'static {}
 
 // Note: The WorkUnit trait is now defined in work_unit.rs
 // Chain-specific work unit implementations live in their respective crates
@@ -472,16 +394,18 @@ pub trait ChainLogic: Sized + Send + Sync {
     type Entity: Entity;
     type Utxo: Sized + Send + Sync;
     type Delta: EntityDelta<Entity = Self::Entity>;
+    type Genesis: Genesis;
+    type ChainSpecificError: std::error::Error + Send + Sync + 'static;
 
     /// The concrete work unit type produced by this chain logic.
-    type WorkUnit<D: Domain<Chain = Self, Entity = Self::Entity, EntityDelta = Self::Delta>>: WorkUnit<D>;
+    type WorkUnit<D: Domain<Chain = Self, Entity = Self::Entity, EntityDelta = Self::Delta, ChainSpecificError = Self::ChainSpecificError, Genesis = Self::Genesis>>: WorkUnit<D>;
 
     /// Initialize the chain logic with configuration and state.
     fn initialize<D: Domain>(
         config: Self::Config,
         state: &D::State,
-        genesis: &Genesis,
-    ) -> Result<Self, ChainError>;
+        genesis: Self::Genesis,
+    ) -> Result<Self, ChainError<Self::ChainSpecificError>>;
 
     /// Check if the chain logic can receive a new block.
     ///
@@ -493,7 +417,10 @@ pub trait ChainLogic: Sized + Send + Sync {
     ///
     /// The block is queued for processing. Call `pop_work()` to get
     /// work units that should be executed.
-    fn receive_block(&mut self, raw: RawBlock) -> Result<BlockSlot, ChainError>;
+    fn receive_block(
+        &mut self,
+        raw: RawBlock,
+    ) -> Result<BlockSlot, ChainError<Self::ChainSpecificError>>;
 
     /// Pop the next work unit to execute.
     ///
@@ -503,7 +430,13 @@ pub trait ChainLogic: Sized + Send + Sync {
     /// The returned work unit should be executed using `executor::execute_work_unit()`.
     fn pop_work<D>(&mut self, domain: &D) -> Option<Self::WorkUnit<D>>
     where
-        D: Domain<Chain = Self, Entity = Self::Entity, EntityDelta = Self::Delta>;
+        D: Domain<
+            Chain = Self,
+            Entity = Self::Entity,
+            EntityDelta = Self::Delta,
+            ChainSpecificError = Self::ChainSpecificError,
+            Genesis = Self::Genesis,
+        >;
 
     /// Compute undo data for a block during rollback.
     ///
@@ -512,9 +445,9 @@ pub trait ChainLogic: Sized + Send + Sync {
     /// to reverse the block's effects.
     fn compute_undo(
         block: &Cbor,
-        inputs: &HashMap<TxoRef, Arc<EraCbor>>,
+        inputs: &HashMap<TxoRef, Arc<TaggedPayload>>,
         point: ChainPoint,
-    ) -> Result<UndoBlockData, ChainError>;
+    ) -> Result<UndoBlockData, ChainError<Self::ChainSpecificError>>;
 
     /// Compute catch-up data from a WAL entry for recovery.
     ///
@@ -524,44 +457,70 @@ pub trait ChainLogic: Sized + Send + Sync {
     /// stores that are behind the state store.
     fn compute_catchup(
         block: &Cbor,
-        inputs: &HashMap<TxoRef, Arc<EraCbor>>,
+        inputs: &HashMap<TxoRef, Arc<TaggedPayload>>,
         point: ChainPoint,
-    ) -> Result<CatchUpBlockData, ChainError>;
+    ) -> Result<CatchUpBlockData, ChainError<Self::ChainSpecificError>>;
 
     // TODO: remove from the interface - this is Cardano-specific
-    fn decode_utxo(&self, utxo: Arc<EraCbor>) -> Result<Self::Utxo, ChainError>;
+    fn decode_utxo(
+        &self,
+        utxo: Arc<TaggedPayload>,
+    ) -> Result<Self::Utxo, ChainError<Self::ChainSpecificError>>;
 
     // TODO: remove from the interface - this is Cardano-specific
-    fn mutable_slots(domain: &impl Domain) -> BlockSlot;
+    fn mutable_slots(
+        domain: &impl Domain<Genesis = Self::Genesis>,
+    ) -> Result<BlockSlot, ChainError<Self::ChainSpecificError>>;
 
     // TODO: remove from the interface - this is Cardano-specific
-    fn last_immutable_slot(domain: &impl Domain, tip: BlockSlot) -> BlockSlot {
-        tip.saturating_sub(Self::mutable_slots(domain))
+    fn last_immutable_slot(
+        domain: &impl Domain<Genesis = Self::Genesis>,
+        tip: BlockSlot,
+    ) -> Result<BlockSlot, ChainError<Self::ChainSpecificError>> {
+        Ok(tip.saturating_sub(Self::mutable_slots(domain)?))
     }
 
-    /// Validate a transaction against the current ledger state.
-    fn validate_tx<D: Domain>(
+    fn tx_produced_utxos(
+        era_body: &TaggedPayload,
+    ) -> Result<Vec<(TxoRef, TaggedPayload)>, Self::ChainSpecificError>;
+    fn tx_consumed_ref(era_body: &TaggedPayload) -> Result<Vec<TxoRef>, Self::ChainSpecificError>;
+
+    fn find_tx_in_block(
+        block: &[u8],
+        tx_hash: &TxHash,
+    ) -> Result<Option<(TaggedPayload, TxOrder)>, Self::ChainSpecificError>;
+
+    // Validate a transaction against the current ledger state.
+    fn validate_tx<D: Domain<ChainSpecificError = Self::ChainSpecificError>>(
         &self,
         cbor: &[u8],
         utxos: &MempoolAwareUtxoStore<D>,
         tip: Option<ChainPoint>,
-        genesis: &Genesis,
-    ) -> Result<mempool::MempoolTx, ChainError>;
+        genesis: &Self::Genesis,
+    ) -> Result<mempool::MempoolTx, ChainError<Self::ChainSpecificError>>;
+
+    /// Evaluate a transaction's scripts and return execution unit reports.
+    type EvalReport: Send + Sync;
+
+    fn eval_tx<D: Domain<ChainSpecificError = Self::ChainSpecificError>>(
+        cbor: &[u8],
+        utxos: &MempoolAwareUtxoStore<D>,
+    ) -> Result<Self::EvalReport, ChainError<Self::ChainSpecificError>>;
 }
 
 #[derive(Debug, Error)]
-pub enum DomainError {
+pub enum DomainError<E: std::error::Error + Send + Sync + 'static> {
     #[error("wal error: {0}")]
     WalError(#[from] WalError),
 
     #[error("chain error: {0}")]
-    ChainError(#[from] ChainError),
+    ChainError(#[from] ChainError<E>),
 
     #[error("state error: {0}")]
     StateError(#[from] StateError),
 
     #[error("archive error: {0}")]
-    ArchiveError(#[from] ArchiveError),
+    ArchiveError(#[from] ArchiveError<E>),
 
     #[error("index error: {0}")]
     IndexError(#[from] IndexError),
@@ -601,11 +560,15 @@ pub trait TipSubscription: Send + Sync + 'static {
 pub trait Domain: Send + Sync + Clone + 'static {
     type Entity: Entity;
     type EntityDelta: EntityDelta<Entity = Self::Entity> + std::fmt::Debug;
+    type Genesis: Genesis;
+    type ChainSpecificError: std::error::Error + Send + Sync + 'static;
 
     type Chain: ChainLogic<
         Delta = Self::EntityDelta,
         Entity = Self::Entity,
         WorkUnit<Self> = Self::WorkUnit,
+        Genesis = Self::Genesis,
+        ChainSpecificError = Self::ChainSpecificError,
     >;
 
     /// The concrete work unit type for this domain.
@@ -614,14 +577,14 @@ pub trait Domain: Send + Sync + Clone + 'static {
 
     type Wal: WalStore<Delta = Self::EntityDelta>;
     type State: StateStore;
-    type Archive: ArchiveStore;
+    type Archive: ArchiveStore<ChainSpecificError = Self::ChainSpecificError>;
     type Indexes: IndexStore;
     type Mempool: MempoolStore;
     type TipSubscription: TipSubscription;
 
     fn storage_config(&self) -> &config::StorageConfig;
     fn sync_config(&self) -> &config::SyncConfig;
-    fn genesis(&self) -> Arc<Genesis>;
+    fn genesis(&self) -> Arc<Self::Genesis>;
 
     fn read_chain(&self) -> std::sync::RwLockReadGuard<'_, Self::Chain>;
     fn write_chain(&self) -> std::sync::RwLockWriteGuard<'_, Self::Chain>;
@@ -632,17 +595,19 @@ pub trait Domain: Send + Sync + Clone + 'static {
     fn indexes(&self) -> &Self::Indexes;
     fn mempool(&self) -> &Self::Mempool;
 
-    fn watch_tip(&self, from: Option<ChainPoint>) -> Result<Self::TipSubscription, DomainError>;
+    fn watch_tip(
+        &self,
+        from: Option<ChainPoint>,
+    ) -> Result<Self::TipSubscription, DomainError<Self::ChainSpecificError>>;
     fn notify_tip(&self, tip: TipEvent);
 
     const MAX_PRUNE_SLOTS_PER_HOUSEKEEPING: u64 = 10_000;
 
-    fn housekeeping(&self) -> Result<bool, DomainError> {
-        let max_ledger_slots = self
-            .storage_config()
-            .state
-            .max_history()
-            .unwrap_or(Self::Chain::mutable_slots(self));
+    fn housekeeping(&self) -> Result<bool, DomainError<Self::ChainSpecificError>> {
+        let max_ledger_slots = match self.storage_config().state.max_history() {
+            Some(x) => x,
+            None => Self::Chain::mutable_slots(self)?,
+        };
 
         info!(max_ledger_slots, "pruning ledger for excess history");
 
@@ -687,9 +652,9 @@ mod tests {
     use super::*;
 
     pub fn slot_to_hash(slot: u64) -> BlockHash {
-        let mut hasher = pallas::crypto::hash::Hasher::<256>::new();
-        hasher.input(&(slot as i32).to_le_bytes());
-        hasher.finalize()
+        let mut bytes = [0u8; 32];
+        bytes[..8].copy_from_slice(&slot.to_le_bytes());
+        BlockHash::new(bytes)
     }
 
     #[test]

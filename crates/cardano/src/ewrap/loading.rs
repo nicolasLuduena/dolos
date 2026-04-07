@@ -1,6 +1,8 @@
 use std::{collections::HashMap, sync::Arc};
 
-use dolos_core::{BlockSlot, ChainError, Domain, Genesis, StateStore, TxOrder};
+use dolos_core::{BlockSlot, ChainError, StateStore, TxOrder};
+
+use crate::CardanoDomain;
 use pallas::{codec::minicbor, ledger::primitives::StakeCredential};
 
 use crate::{
@@ -24,11 +26,13 @@ impl BoundaryWork {
             .is_some_and(|e| e == self.starting_epoch_no())
     }
 
-    fn load_pool_reward_account<D: Domain>(
+    fn load_pool_reward_account<
+        D: CardanoDomain,
+    >(
         &self,
         state: &D::State,
         pool: &PoolState,
-    ) -> Result<Option<AccountState>, ChainError> {
+    ) -> Result<Option<AccountState>, ChainError<crate::CardanoError>> {
         // Use scheduled (next) params if available, matching the Haskell ledger's
         // SNAP → POOLREAP ordering where future pool params become current before
         // pool reaping. This ensures the deposit refund goes to the correct reward
@@ -40,8 +44,9 @@ impl BoundaryWork {
             .unwrap_or_else(|| pool.snapshot.unwrap_live());
         let account = &snapshot.params.reward_account;
 
-        let account =
-            pallas_extras::parse_reward_account(account).ok_or(ChainError::InvalidPoolParams)?;
+        let account = pallas_extras::parse_reward_account(account).ok_or(
+            ChainError::ChainSpecific(crate::CardanoError::InvalidPoolParams),
+        )?;
 
         let entity_key = minicbor::to_vec(account).unwrap();
 
@@ -50,7 +55,12 @@ impl BoundaryWork {
         Ok(account)
     }
 
-    fn load_pool_data<D: Domain>(&mut self, state: &D::State) -> Result<(), ChainError> {
+    fn load_pool_data<
+        D: CardanoDomain,
+    >(
+        &mut self,
+        state: &D::State,
+    ) -> Result<(), ChainError<crate::CardanoError>> {
         let pools = state.iter_entities_typed::<PoolState>(PoolState::NS, None)?;
 
         for record in pools {
@@ -79,7 +89,10 @@ impl BoundaryWork {
         self.starting_epoch_no() == unregistered_epoch + 1
     }
 
-    fn should_expire_drep(&self, drep: &DRepState) -> Result<bool, ChainError> {
+    fn should_expire_drep(
+        &self,
+        drep: &DRepState,
+    ) -> Result<bool, ChainError<crate::CardanoError>> {
         if drep.expired {
             return Ok(false);
         }
@@ -111,7 +124,12 @@ impl BoundaryWork {
         None
     }
 
-    fn load_drep_data<D: Domain>(&mut self, state: &D::State) -> Result<(), ChainError> {
+    fn load_drep_data<
+        D: CardanoDomain,
+    >(
+        &mut self,
+        state: &D::State,
+    ) -> Result<(), ChainError<crate::CardanoError>> {
         let dreps = state.iter_entities_typed::<DRepState>(DRepState::NS, None)?;
 
         for record in dreps {
@@ -130,11 +148,13 @@ impl BoundaryWork {
         Ok(())
     }
 
-    fn load_proposal_reward_account<D: Domain>(
+    fn load_proposal_reward_account<
+        D: CardanoDomain,
+    >(
         &self,
         state: &D::State,
         proposal: &ProposalState,
-    ) -> Result<Option<AccountState>, ChainError> {
+    ) -> Result<Option<AccountState>, ChainError<crate::CardanoError>> {
         let Some(account) = proposal.reward_account.as_ref() else {
             return Ok(None);
         };
@@ -146,7 +166,12 @@ impl BoundaryWork {
         Ok(account)
     }
 
-    fn load_proposal_data<D: Domain>(&mut self, state: &D::State) -> Result<(), ChainError> {
+    fn load_proposal_data<
+        D: CardanoDomain,
+    >(
+        &mut self,
+        state: &D::State,
+    ) -> Result<(), ChainError<crate::CardanoError>> {
         let proposals = state.iter_entities_typed::<ProposalState>(ProposalState::NS, None)?;
 
         for record in proposals {
@@ -172,7 +197,12 @@ impl BoundaryWork {
 
     /// Process pending MIRs: check registration status and apply to registered accounts.
     /// MIRs to unregistered accounts stay in their source pot (no transfer).
-    fn process_pending_mirs<D: Domain>(&mut self, state: &D::State) -> Result<(), ChainError> {
+    fn process_pending_mirs<
+        D: CardanoDomain,
+    >(
+        &mut self,
+        state: &D::State,
+    ) -> Result<(), ChainError<crate::CardanoError>> {
         let pending_iter =
             state.iter_entities_typed::<PendingMirState>(PendingMirState::NS, None)?;
 
@@ -249,7 +279,12 @@ impl BoundaryWork {
         Ok(())
     }
 
-    pub fn compute_deltas<D: Domain>(&mut self, state: &D::State) -> Result<(), ChainError> {
+    pub fn compute_deltas<
+        D: CardanoDomain,
+    >(
+        &mut self,
+        state: &D::State,
+    ) -> Result<(), ChainError<crate::CardanoError>> {
         // Process pending MIRs first (before regular rewards)
         self.process_pending_mirs::<D>(state)?;
 
@@ -353,10 +388,12 @@ impl BoundaryWork {
     }
 
     /// Load pending rewards from state store (persisted by RUPD).
-    fn load_pending_rewards<D: Domain>(
+    fn load_pending_rewards<
+        D: CardanoDomain,
+    >(
         state: &D::State,
         incentives: EpochIncentives,
-    ) -> Result<RewardMap<RupdWork>, ChainError> {
+    ) -> Result<RewardMap<RupdWork>, ChainError<crate::CardanoError>> {
         let pending_iter =
             state.iter_entities_typed::<PendingRewardState>(PendingRewardState::NS, None)?;
 
@@ -396,10 +433,12 @@ impl BoundaryWork {
         Ok(RewardMap::from_pending(pending, incentives))
     }
 
-    pub fn load<D: Domain>(
+    pub fn load<
+        D: CardanoDomain,
+    >(
         state: &D::State,
-        genesis: Arc<Genesis>,
-    ) -> Result<BoundaryWork, ChainError> {
+        genesis: Arc<crate::CardanoGenesis>,
+    ) -> Result<BoundaryWork, ChainError<crate::CardanoError>> {
         let ending_state = crate::load_epoch::<D>(state)?;
         let chain_summary = load_era_summary::<D>(state)?;
         let active_protocol = EraProtocol::from(chain_summary.edge().protocol);

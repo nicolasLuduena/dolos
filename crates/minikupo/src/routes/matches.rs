@@ -4,8 +4,11 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use dolos_cardano::{indexes::CardanoIndexExt, network_from_genesis, pallas_extras};
-use dolos_core::{Domain, EraCbor, IndexStore as _, StateStore as _, TxoRef, UtxoSet};
+use dolos_cardano::{
+    indexes::CardanoIndexExt, network_from_genesis, pallas_extras, pallas_hash_to_core,
+    CardanoError, CardanoGenesis,
+};
+use dolos_core::{Domain, TaggedPayload, IndexStore as _, StateStore as _, TxoRef, UtxoSet};
 use pallas::codec::minicbor;
 use pallas::ledger::{
     addresses::{Address, StakeAddress},
@@ -19,7 +22,7 @@ use std::collections::HashMap;
 
 use crate::{bad_request, patterns, Facade};
 
-pub async fn by_pattern<D: Domain>(
+pub async fn by_pattern<D: Domain<Genesis = CardanoGenesis, ChainSpecificError = CardanoError>>(
     State(facade): State<Facade<D>>,
     Path(pattern): Path<String>,
     Query(query): Query<MatchesQuery>,
@@ -235,7 +238,7 @@ struct BlockInfo {
     tx_index: usize,
 }
 
-fn refs_for_address_pattern<D: Domain>(
+fn refs_for_address_pattern<D: Domain<Genesis = CardanoGenesis>>(
     facade: &Facade<D>,
     pattern: &patterns::AddressPattern,
 ) -> Result<(UtxoSet, OutputFilter), MatchError> {
@@ -352,13 +355,13 @@ async fn refs_for_output_ref_pattern<D: Domain>(
     let refs = match pattern.index() {
         patterns::OutputIndexPattern::Exact(index) => {
             let mut refs = UtxoSet::new();
-            refs.insert(TxoRef(tx_hash, *index));
+            refs.insert(TxoRef(pallas_hash_to_core(tx_hash), *index));
             refs
         }
         patterns::OutputIndexPattern::Any => {
-            let Some(EraCbor(era, cbor)) = facade
+            let Some(TaggedPayload(era, cbor)) = facade
                 .query()
-                .tx_cbor(tx_id.to_vec())
+                .tx_cbor(pallas_hash_to_core(tx_hash))
                 .await
                 .map_err(|_| MatchError::Internal)?
             else {
@@ -369,7 +372,7 @@ async fn refs_for_output_ref_pattern<D: Domain>(
             let tx = MultiEraTx::decode_for_era(era, &cbor).map_err(|_| MatchError::Internal)?;
             let mut refs = UtxoSet::new();
             for (index, _) in tx.outputs().iter().enumerate() {
-                refs.insert(TxoRef(tx_hash, index as u32));
+                refs.insert(TxoRef(pallas_hash_to_core(tx_hash), index as u32));
             }
             refs
         }
@@ -394,7 +397,7 @@ fn stake_credential_pattern(stake: &StakeAddress) -> patterns::CredentialPattern
     }
 }
 
-fn stake_keys_for_credential<D: Domain>(
+fn stake_keys_for_credential<D: Domain<Genesis = CardanoGenesis>>(
     facade: &Facade<D>,
     credential: &patterns::CredentialPattern,
 ) -> Result<Option<Vec<Vec<u8>>>, MatchError> {
@@ -421,7 +424,7 @@ fn stake_keys_for_credential<D: Domain>(
     Ok(Some(keys))
 }
 
-async fn build_matches<D: Domain>(
+async fn build_matches<D: Domain<Genesis = CardanoGenesis, ChainSpecificError = CardanoError>>(
     facade: &Facade<D>,
     refs: UtxoSet,
     filter: OutputFilter,
@@ -432,12 +435,13 @@ async fn build_matches<D: Domain>(
         .get_utxos(refs.into_iter().collect())
         .map_err(|_| MatchError::Internal)?;
 
-    let mut block_cache: HashMap<pallas::crypto::hash::Hash<32>, BlockInfo> = HashMap::new();
+    let mut block_cache: HashMap<dolos_core::hash::Hash<32>, BlockInfo> = HashMap::new();
     let mut out = Vec::new();
 
     for (txo_ref, cbor) in utxos {
-        let cbor: &dolos_core::EraCbor = cbor.as_ref();
-        let output = MultiEraOutput::try_from(cbor).map_err(|_| MatchError::Internal)?;
+        let cbor: &dolos_core::TaggedPayload = cbor.as_ref();
+        let era = Era::try_from(cbor.0).map_err(|_| MatchError::Internal)?;
+        let output = MultiEraOutput::decode(era, &cbor.1).map_err(|_| MatchError::Internal)?;
         let address = output.address().map_err(|_| MatchError::Internal)?;
 
         if !matches_output_filter(&output, &address, &filter) {
@@ -450,7 +454,7 @@ async fn build_matches<D: Domain>(
             None => {
                 let Some((raw_block, tx_index)) = facade
                     .query()
-                    .block_by_tx_hash(tx_hash.to_vec())
+                    .block_by_tx_hash(tx_hash)
                     .await
                     .map_err(|_| MatchError::Internal)?
                 else {
@@ -553,7 +557,7 @@ fn output_script_hash(output: &MultiEraOutput<'_>) -> Option<pallas::crypto::has
     })
 }
 
-async fn resolve_output_extras<D: Domain>(
+async fn resolve_output_extras<D: Domain<ChainSpecificError = CardanoError>>(
     facade: &Facade<D>,
     output: &MultiEraOutput<'_>,
     script_hash: Option<pallas::crypto::hash::Hash<28>>,

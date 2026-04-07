@@ -187,7 +187,9 @@ impl ChainSummary {
     }
 }
 
-pub fn load_era_summary<D: Domain>(state: &D::State) -> Result<ChainSummary, ChainError> {
+pub fn load_era_summary<D: Domain>(
+    state: &D::State,
+) -> Result<ChainSummary, ChainError<D::ChainSpecificError>> {
     let eras = state.iter_entities_typed(EraSummary::NS, None)?;
 
     let mut chain = ChainSummary::default();
@@ -201,7 +203,9 @@ pub fn load_era_summary<D: Domain>(state: &D::State) -> Result<ChainSummary, Cha
     Ok(chain)
 }
 
-pub fn load_chain_summary_from_state(state: &impl StateStore) -> Result<ChainSummary, ChainError> {
+pub fn load_chain_summary_from_state(
+    state: &impl StateStore,
+) -> Result<ChainSummary, ChainError<crate::CardanoError>> {
     let eras = state.iter_entities_typed(EraSummary::NS, None)?;
 
     let mut chain = ChainSummary::default();
@@ -237,9 +241,9 @@ pub fn log_epoch_range_to_key_range(
     (start_slot, end_slot, range)
 }
 
-pub fn load_active_era<D: Domain>(
+pub fn load_active_era<D: Domain<ChainSpecificError = crate::CardanoError>>(
     state: &D::State,
-) -> Result<(EraProtocol, EraSummary), ChainError> {
+) -> Result<(EraProtocol, EraSummary), ChainError<crate::CardanoError>> {
     let eras = state.iter_entities_typed::<EraSummary>(EraSummary::NS, None)?;
 
     match eras.last() {
@@ -248,8 +252,8 @@ pub fn load_active_era<D: Domain>(
                 let protocol = EraProtocol::from(key);
                 Ok((protocol, summary))
             }
-            Err(_) => Err(ChainError::EraNotFound),
+            Err(_) => Err(ChainError::ChainSpecific(crate::CardanoError::EraNotFound)),
         },
-        None => Err(ChainError::EraNotFound),
+        None => Err(ChainError::ChainSpecific(crate::CardanoError::EraNotFound)),
     }
 }

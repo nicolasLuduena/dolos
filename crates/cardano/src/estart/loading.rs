@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use dolos_core::{ChainError, Domain, Genesis, StateStore, TxoRef};
+use dolos_core::{ChainError, StateStore, TxoRef};
+
+use crate::CardanoDomain;
 
 use crate::{
     estart::BoundaryVisitor, load_era_summary, roll::WorkDeltas, AccountState, DRepState,
@@ -8,7 +10,10 @@ use crate::{
 };
 
 impl super::WorkContext {
-    pub fn compute_deltas<D: Domain>(&mut self, state: &D::State) -> Result<(), ChainError> {
+    pub fn compute_deltas<D: CardanoDomain>(
+        &mut self,
+        state: &D::State,
+    ) -> Result<(), ChainError<crate::CardanoError>> {
         let mut visitor_nonces = super::nonces::BoundaryVisitor;
         let mut visitor_reset = super::reset::BoundaryVisitor::default();
 
@@ -57,38 +62,38 @@ impl super::WorkContext {
     /// Compute the value of unredeemed AVVM UTxOs at the Shelley→Allegra
     /// boundary. These UTxOs are removed from the UTxO set and their value
     /// returned to reserves, matching the Haskell ledger's `translateEra`.
-    fn compute_avvm_reclamation<D: Domain>(
+    fn compute_avvm_reclamation<D: CardanoDomain>(
         state: &D::State,
-        genesis: &Genesis,
-    ) -> Result<u64, ChainError> {
+        genesis: &crate::CardanoGenesis,
+    ) -> Result<u64, ChainError<crate::CardanoError>> {
         let avvm_utxos = pallas::ledger::configs::byron::genesis_avvm_utxos(&genesis.byron);
 
         // Collect all Byron genesis AVVM UTxO refs (bootstrap redeemer addresses)
-        let refs: Vec<TxoRef> = avvm_utxos.iter().map(|(tx, _, _)| TxoRef(*tx, 0)).collect();
+        let refs: Vec<TxoRef> = avvm_utxos
+            .iter()
+            .map(|(tx, _, _)| TxoRef(crate::pallas_hash_to_core(*tx), 0))
+            .collect();
 
         // Query the UTxO set to find which are still unspent
         let remaining = state.get_utxos(refs)?;
 
         // Sum the remaining values
-        let total: u64 = remaining
-            .values()
-            .map(|utxo| {
-                pallas::ledger::traverse::MultiEraOutput::try_from(utxo.as_ref())
-                    .map(|o| o.value().coin())
-                    .unwrap_or(0)
-            })
-            .sum();
+        let mut total = 0u64;
 
-        tracing::debug!(
-            remaining_count = remaining.len(),
-            total_avvm = total,
-            "AVVM reclamation at Shelley→Allegra boundary"
-        );
+        for utxo in remaining.values() {
+            total += crate::multi_era_output_from_era_cbor(utxo.as_ref())
+                .map_err(ChainError::ChainSpecific)?
+                .value()
+                .coin();
+        }
 
         Ok(total)
     }
 
-    pub fn load<D: Domain>(state: &D::State, genesis: Arc<Genesis>) -> Result<Self, ChainError> {
+    pub fn load<D: CardanoDomain>(
+        state: &D::State,
+        genesis: Arc<crate::CardanoGenesis>,
+    ) -> Result<Self, ChainError<crate::CardanoError>> {
         let ended_state = crate::load_epoch::<D>(state)?;
         let chain_summary = load_era_summary::<D>(state)?;
         let active_protocol = EraProtocol::from(chain_summary.edge().protocol);

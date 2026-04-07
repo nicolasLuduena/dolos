@@ -1,8 +1,6 @@
 use super::*;
 use crate::TagDimension;
 
-pub use pallas::ledger::validate::phase2::EvalReport;
-
 use futures_core::Stream;
 use std::pin::Pin;
 use tracing::{debug, warn};
@@ -10,14 +8,11 @@ use tracing::{debug, warn};
 #[derive(Debug)]
 pub struct MempoolTx {
     pub hash: TxHash,
-    pub payload: EraCbor,
+    pub payload: TaggedPayload,
     pub stage: MempoolTxStage,
     pub confirmations: u32,
     pub non_confirmations: u32,
     pub confirmed_at: Option<ChainPoint>,
-
-    // this might be empty if the tx is cloned
-    pub report: Option<EvalReport>,
 }
 
 impl PartialEq for MempoolTx {
@@ -37,13 +32,12 @@ impl Clone for MempoolTx {
             confirmations: self.confirmations,
             non_confirmations: self.non_confirmations,
             confirmed_at: self.confirmed_at.clone(),
-            report: None,
         }
     }
 }
 
 impl MempoolTx {
-    pub fn new(hash: TxHash, payload: EraCbor, report: EvalReport) -> Self {
+    pub fn new(hash: TxHash, payload: TaggedPayload) -> Self {
         Self {
             hash,
             payload,
@@ -51,7 +45,6 @@ impl MempoolTx {
             confirmations: 0,
             non_confirmations: 0,
             confirmed_at: None,
-            report: Some(report),
         }
     }
 
@@ -110,11 +103,10 @@ pub enum MempoolError {
     #[error("internal error: {0}")]
     Internal(#[from] Box<dyn std::error::Error + Send + Sync>),
 
-    #[error("traverse error: {0}")]
-    TraverseError(#[from] pallas::ledger::traverse::Error),
-
+    // #[error("traverse error: {0}")]
+    // TraverseError(#[from] pallas::ledger::traverse::Error),
     #[error("decode error: {0}")]
-    DecodeError(#[from] pallas::codec::minicbor::decode::Error),
+    DecodeError(String),
 
     #[error(transparent)]
     StateError(#[from] StateError),
@@ -291,24 +283,24 @@ pub struct MempoolAwareUtxoStore<'a, D: Domain> {
 
 fn scan_mempool_utxos<D: Domain, F>(predicate: F, mempool: &D::Mempool) -> HashSet<TxoRef>
 where
-    F: Fn(&MultiEraOutput<'_>) -> bool,
+    F: Fn(&TaggedPayload) -> bool,
 {
     let mut refs = HashSet::new();
 
     let mut all_txs = mempool.peek_pending();
     all_txs.extend(mempool.peek_inflight());
 
-    for mtx in all_txs {
-        let era_cbor = &mtx.payload;
-        let Some(tx) = MultiEraTx::try_from(era_cbor).ok() else {
-            continue;
+    for mtx in all_txs.into_iter() {
+        debug!(mtx = %mtx.hash, "scanning mempool tx");
+        let utxos = match D::Chain::tx_produced_utxos(&mtx.payload) {
+            Ok(utxos) => utxos,
+            Err(e) => {
+                warn!(tx = %mtx.hash, error = %e, "failed to decode mempool tx outputs");
+                continue;
+            }
         };
-
-        debug!(tx = %tx.hash(), "scanning mempool tx");
-
-        for (idx, inflight) in tx.produces() {
-            if predicate(&inflight) {
-                let txoref = TxoRef::from((tx.hash(), idx as u32));
+        for (txoref, utxo) in utxos {
+            if predicate(&utxo) {
                 debug!(txoref = %txoref, "mempool utxo matches predicate");
                 refs.insert(txoref);
             }
@@ -325,16 +317,15 @@ fn exclude_inflight_stxis<D: Domain>(refs: &mut HashSet<TxoRef>, mempool: &D::Me
     all_txs.extend(mempool.peek_inflight());
 
     for mtx in all_txs {
-        let era_cbor = &mtx.payload;
-        let Some(tx) = MultiEraTx::try_from(era_cbor).ok() else {
-            warn!("invalid inflight tx");
-            continue;
+        debug!(tx = %mtx.hash, "checking inflight tx");
+        let consumed = match D::Chain::tx_consumed_ref(&mtx.payload) {
+            Ok(consumed) => consumed,
+            Err(e) => {
+                warn!(tx = %mtx.hash, error = %e, "failed to decode mempool tx inputs");
+                continue;
+            }
         };
-
-        debug!(tx = %tx.hash(), "checking inflight tx");
-
-        for locked in tx.consumes() {
-            let txoref = TxoRef::from(&locked);
+        for txoref in consumed {
             if refs.remove(&txoref) {
                 debug!(txoref = %txoref, "excluded stxi");
             }
@@ -349,20 +340,18 @@ fn select_mempool_utxos<D: Domain>(refs: &mut HashSet<TxoRef>, mempool: &D::Memp
     all_txs.extend(mempool.peek_inflight());
 
     for mtx in all_txs {
-        let era_cbor = &mtx.payload;
-        let Some(tx) = MultiEraTx::try_from(era_cbor).ok() else {
-            continue;
+        debug!(tx = %mtx.hash, "checking mempool tx");
+        let utxos = match D::Chain::tx_produced_utxos(&mtx.payload) {
+            Ok(utxos) => utxos,
+            Err(e) => {
+                warn!(tx = %mtx.hash, error = %e, "failed to decode mempool tx outputs");
+                continue;
+            }
         };
-
-        debug!(tx = %tx.hash(), "checking mempool tx");
-
-        for (idx, inflight) in tx.produces() {
-            let txoref = TxoRef::from((tx.hash(), idx as u32));
+        for (txoref, era_cbor) in utxos {
             debug!(txoref = %txoref, "checking mempool utxo");
-
             if refs.contains(&txoref) {
-                let era_cbor = EraCbor::from(inflight);
-                debug!(txoref = %txoref, "selected utxo available inmempool tx");
+                debug!(txoref = %txoref, "selected utxo available in mempool tx");
                 refs.remove(&txoref);
                 map.insert(txoref, Arc::new(era_cbor));
             }
@@ -404,7 +393,7 @@ impl<'a, D: Domain> MempoolAwareUtxoStore<'a, D> {
         predicate: F,
     ) -> Result<UtxoSet, IndexError>
     where
-        F: Fn(&MultiEraOutput<'_>) -> bool,
+        F: Fn(&TaggedPayload) -> bool,
     {
         let from_mempool = scan_mempool_utxos::<D, _>(predicate, self.mempool);
 
@@ -438,17 +427,18 @@ mod tests {
     use std::task::{Context, Poll};
 
     use dolos_testing::streams::{noop_waker, ScriptedStream};
-    use dolos_testing::tx_sequence_to_hash;
 
     type MockStream = ScriptedStream<Result<MempoolEvent, MempoolError>>;
 
     fn test_hash(n: u8) -> TxHash {
-        tx_sequence_to_hash(n as u64)
+        let mut bytes = [0u8; 32];
+        bytes[0] = n;
+        TxHash::new(bytes)
     }
 
     fn test_event(hash: TxHash) -> MempoolEvent {
         MempoolEvent {
-            tx: MempoolTx::new(hash, EraCbor(7, vec![0x80]), vec![]),
+            tx: MempoolTx::new(hash, TaggedPayload(7, vec![0x80])),
         }
     }
 

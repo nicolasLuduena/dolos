@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use tx3_resolver::{Expression, StructExpr};
 
-use dolos_core::{EraCbor, TxoRef};
+use dolos_cardano::pallas_hash_to_core;
+use dolos_core::{TaggedPayload, TxoRef};
 use pallas::{
     codec::utils::KeyValuePairs,
     ledger::{
@@ -97,23 +98,23 @@ fn map_datum(datum: &PlutusData) -> Expression {
 pub fn from_tx3_utxoref(r#ref: tx3_resolver::UtxoRef) -> TxoRef {
     let txid = dolos_cardano::pallas::crypto::hash::Hash::from(r#ref.txid.as_slice());
 
-    TxoRef(txid, r#ref.index)
+    TxoRef(pallas_hash_to_core(txid), r#ref.index)
 }
 
 pub fn into_tx3_utxoref(txoref: TxoRef) -> tx3_resolver::UtxoRef {
     tx3_resolver::UtxoRef {
-        txid: txoref.0.to_vec(),
+        txid: txoref.0.as_slice().to_vec(),
         index: txoref.1,
     }
 }
 
 pub fn into_tx3_utxo(
     txoref: TxoRef,
-    utxo: Arc<EraCbor>,
+    utxo: Arc<TaggedPayload>,
 ) -> Result<tx3_resolver::Utxo, Box<tx3_resolver::Error>> {
     let r#ref = into_tx3_utxoref(txoref);
 
-    let EraCbor(era, cbor) = utxo.as_ref();
+    let TaggedPayload(era, cbor) = utxo.as_ref();
 
     let era = Era::try_from(*era).map_err(|e| tx3_resolver::Error::StoreError(e.to_string()))?;
 

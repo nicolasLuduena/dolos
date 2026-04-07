@@ -1,4 +1,4 @@
-use dolos_core::{EraCbor, TxoRef, UtxoMap, UtxoSetDelta};
+use dolos_core::{TaggedPayload, TxoRef, UtxoMap, UtxoSetDelta};
 use redb::{
     Range, ReadTransaction, ReadableDatabase, ReadableTable as _, ReadableTableMetadata as _,
     TableDefinition, TableStats, WriteTransaction,
@@ -15,7 +15,7 @@ type UtxosValue = (u16, &'static [u8]);
 pub struct UtxosIterator(Range<'static, UtxosKey, UtxosValue>);
 
 impl Iterator for UtxosIterator {
-    type Item = Result<(TxoRef, EraCbor), ::redb::StorageError>;
+    type Item = Result<(TxoRef, TaggedPayload), ::redb::StorageError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let x = self.0.next()?;
@@ -26,7 +26,7 @@ impl Iterator for UtxosIterator {
 
             let (era, cbor) = v.value();
             let cbor = cbor.to_owned();
-            let v = EraCbor(era, cbor);
+            let v = TaggedPayload(era, cbor);
 
             (k, v)
         });
@@ -58,10 +58,10 @@ impl UtxosTable {
         let mut out = HashMap::new();
 
         for key in refs {
-            if let Some(body) = table.get(&(&key.0 as &[u8; 32], key.1))? {
+            if let Some(body) = table.get(&(key.0.as_array(), key.1))? {
                 let (era, cbor) = body.value();
                 let cbor = cbor.to_owned();
-                let value = Arc::new(EraCbor(era, cbor));
+                let value = Arc::new(TaggedPayload(era, cbor));
 
                 out.insert(key, value);
             }
@@ -74,24 +74,24 @@ impl UtxosTable {
         let mut table = wx.open_table(Self::DEF)?;
 
         for (k, v) in delta.produced_utxo.iter() {
-            let k: (&[u8; 32], u32) = (&k.0, k.1);
+            let k: (&[u8; 32], u32) = (k.0.as_array(), k.1);
             let v: (u16, &[u8]) = (v.0, &v.1);
             table.insert(k, v)?;
         }
 
         for (k, v) in delta.recovered_stxi.iter() {
-            let k: (&[u8; 32], u32) = (&k.0, k.1);
+            let k: (&[u8; 32], u32) = (k.0.as_array(), k.1);
             let v: (u16, &[u8]) = (v.0, &v.1);
             table.insert(k, v)?;
         }
 
         for (k, _) in delta.undone_utxo.iter() {
-            let k: (&[u8; 32], u32) = (&k.0, k.1);
+            let k: (&[u8; 32], u32) = (k.0.as_array(), k.1);
             table.remove(k)?;
         }
 
         for (k, _) in delta.consumed_utxo.iter() {
-            let k: (&[u8; 32], u32) = (&k.0, k.1);
+            let k: (&[u8; 32], u32) = (k.0.as_array(), k.1);
             table.remove(k)?;
         }
 
@@ -138,7 +138,7 @@ mod tests {
     use dolos_testing::*;
     use pallas::ledger::{
         addresses::{Address, ShelleyDelegationPart},
-        traverse::MultiEraOutput,
+        traverse::{Era as PallasEra, MultiEraOutput},
     };
 
     use crate::state::StateStore;
@@ -179,33 +179,41 @@ mod tests {
 
         // Handle forward operations: produced_utxo -> add to index, consumed_utxo -> remove from index
         for (txo_ref, era_cbor) in utxo_delta.produced_utxo.iter() {
-            if let Ok(output) = MultiEraOutput::try_from(era_cbor.as_ref()) {
-                let tags = extract_utxo_tags(&output);
-                produced.push((txo_ref.clone(), tags));
+            if let Ok(pallas_era) = PallasEra::try_from(era_cbor.0) {
+                if let Ok(output) = MultiEraOutput::decode(pallas_era, &era_cbor.1) {
+                    let tags = extract_utxo_tags(&output);
+                    produced.push((txo_ref.clone(), tags));
+                }
             }
         }
 
         for (txo_ref, era_cbor) in utxo_delta.consumed_utxo.iter() {
-            if let Ok(output) = MultiEraOutput::try_from(era_cbor.as_ref()) {
-                let tags = extract_utxo_tags(&output);
-                consumed.push((txo_ref.clone(), tags));
+            if let Ok(pallas_era) = PallasEra::try_from(era_cbor.0) {
+                if let Ok(output) = MultiEraOutput::decode(pallas_era, &era_cbor.1) {
+                    let tags = extract_utxo_tags(&output);
+                    consumed.push((txo_ref.clone(), tags));
+                }
             }
         }
 
         // Handle rollback operations: recovered_stxi -> restore to index (add), undone_utxo -> remove from index
         // recovered_stxi: UTxOs that were previously consumed, now being restored
         for (txo_ref, era_cbor) in utxo_delta.recovered_stxi.iter() {
-            if let Ok(output) = MultiEraOutput::try_from(era_cbor.as_ref()) {
-                let tags = extract_utxo_tags(&output);
-                produced.push((txo_ref.clone(), tags));
+            if let Ok(pallas_era) = PallasEra::try_from(era_cbor.0) {
+                if let Ok(output) = MultiEraOutput::decode(pallas_era, &era_cbor.1) {
+                    let tags = extract_utxo_tags(&output);
+                    produced.push((txo_ref.clone(), tags));
+                }
             }
         }
 
         // undone_utxo: UTxOs that were previously produced, now being removed
         for (txo_ref, era_cbor) in utxo_delta.undone_utxo.iter() {
-            if let Ok(output) = MultiEraOutput::try_from(era_cbor.as_ref()) {
-                let tags = extract_utxo_tags(&output);
-                consumed.push((txo_ref.clone(), tags));
+            if let Ok(pallas_era) = PallasEra::try_from(era_cbor.0) {
+                if let Ok(output) = MultiEraOutput::decode(pallas_era, &era_cbor.1) {
+                    let tags = extract_utxo_tags(&output);
+                    consumed.push((txo_ref.clone(), tags));
+                }
             }
         }
 
